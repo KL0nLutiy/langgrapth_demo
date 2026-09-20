@@ -1,17 +1,12 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "crypto-portfolio"
 version = "0.1.0"
-description = "Crypto portfolio tracker CLI"
-readme = "README.md"
-requires-python = ">=3.10"
-dependencies = []
-
-[project.optional-dependencies]
-dev = ["pytest>=7"]
+description = "Track a crypto portfolio with CLI and web UI."
+requires-python = ">=3.9"
 
 [project.scripts]
 crypto-portfolio = "crypto_portfolio.cli:main"

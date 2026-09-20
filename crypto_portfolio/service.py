@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from .models import Asset, AssetValue, Portfolio, PortfolioSummary
+from .models import Asset, AssetValue, Portfolio, PortfolioSummary, _validate_amount
 from .pricing import PriceProvider
 
 
@@ -38,14 +38,17 @@ class PortfolioService:
             profit_loss=profit_loss,
             profit_loss_pct=profit_loss_pct,
             allocation_pct=allocation_pct,
+            cost_basis=cost,
         )
 
     def get_holdings(self) -> List[AssetValue]:
         holdings: List[AssetValue] = []
+
         for symbol in self.portfolio.symbols():
             holding = self.get_holding(symbol)
             if holding is not None:
                 holdings.append(holding)
+
         return holdings
 
     def get_summary(self) -> PortfolioSummary:
@@ -60,7 +63,7 @@ class PortfolioService:
             profit_loss_pct = 0.0
 
         return PortfolioSummary(
-            currency="USD",
+            currency=self.portfolio.currency,
             total_value=total_value,
             total_cost=total_cost,
             total_profit_loss=total_profit_loss,
@@ -71,4 +74,51 @@ class PortfolioService:
     def get_prices(self, symbols: Optional[List[str]] = None) -> Dict[str, float]:
         if symbols is None:
             symbols = self.portfolio.symbols()
+
         return self.provider.get_prices(symbols)
+
+    def get_price(self, symbol: str) -> float:
+        return self.provider.get_price(symbol)
+
+    def add_asset(
+        self,
+        symbol: str,
+        quantity: float = 0.0,
+        cost_basis: float = 0.0,
+        avg_price: Optional[float] = None,
+    ) -> Asset:
+        if avg_price is not None:
+            quantity = _validate_amount(quantity, "quantity")
+            avg_price = _validate_amount(avg_price, "avg_price")
+            cost_basis = quantity * avg_price
+        else:
+            quantity = _validate_amount(quantity, "quantity")
+            cost_basis = _validate_amount(cost_basis, "cost_basis")
+
+        return self.portfolio.add_asset(
+            symbol,
+            quantity=quantity,
+            cost_basis=cost_basis,
+        )
+
+    def add_holding(
+        self,
+        symbol: str,
+        quantity: float,
+        avg_price: Optional[float] = None,
+        cost_basis: Optional[float] = None,
+    ) -> Asset:
+        if avg_price is not None:
+            return self.add_asset(symbol, quantity=quantity, avg_price=avg_price)
+        if cost_basis is not None:
+            return self.add_asset(symbol, quantity=quantity, cost_basis=cost_basis)
+        return self.add_asset(symbol, quantity=quantity)
+
+    def set_quantity(self, symbol: str, quantity: float) -> Optional[Asset]:
+        return self.portfolio.set_quantity(symbol, quantity)
+
+    def remove_asset(self, symbol: str) -> bool:
+        return self.portfolio.remove_asset(symbol)
+
+    def set_price(self, symbol: str, price: float) -> None:
+        self.provider.set_price(symbol, price)

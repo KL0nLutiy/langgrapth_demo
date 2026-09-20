@@ -15,6 +15,9 @@ class PriceProvider:
         if symbols is None:
             return result
 
+        if isinstance(symbols, str):
+            symbols = [symbols]
+
         for symbol in symbols:
             try:
                 normalized = normalize_symbol(symbol)
@@ -40,15 +43,30 @@ class StaticPriceProvider(PriceProvider):
             return
 
         if isinstance(prices, Mapping):
-            items = prices.items()
+            items = list(prices.items())
         else:
             items = prices
 
-        for symbol, price in items:
-            self.set_price(symbol, price)
+        for item in items:
+            try:
+                if isinstance(item, Mapping):
+                    symbol = item.get("symbol")
+                    price = item.get("price")
+                    if symbol is not None and price is not None:
+                        self.set_price(symbol, price)
+                else:
+                    symbol, price = item
+                    self.set_price(symbol, price)
+            except (TypeError, ValueError):
+                continue
 
     def get_price(self, symbol: str) -> float:
-        return self._prices.get(normalize_symbol(symbol), 0.0)
+        try:
+            normalized = normalize_symbol(symbol)
+        except ValueError:
+            return 0.0
+
+        return self._prices.get(normalized, 0.0)
 
     def set_price(self, symbol: str, price: float) -> None:
         self._prices[normalize_symbol(symbol)] = _validate_amount(price, "price")
