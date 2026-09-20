@@ -1,8 +1,8 @@
 __pycache__/
 *.py[cod]
+*.egg-info/
 .venv/
+venv/
 .pytest_cache/
 portfolio.json
-dist/
-build/
-*.egg-info/
+prices.json

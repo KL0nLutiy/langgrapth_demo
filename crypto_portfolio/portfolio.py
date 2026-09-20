@@ -1,3 +1,3 @@
-from .models import Asset, Portfolio
+from .models import Asset, AssetValue, Portfolio, PortfolioSummary
 
-__all__ = ["Asset", "Portfolio"]
+__all__ = ["Asset", "AssetValue", "Portfolio", "PortfolioSummary"]

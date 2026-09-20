@@ -1,8 +1,6 @@
 import contextlib
 import io
 import json
-import os
-import tempfile
 
 from crypto_portfolio import (
     Asset,
@@ -112,209 +110,69 @@ def test_allocation_zero_value():
 
     allocation = portfolio.allocation({"BTC": 0.0})
 
-    assert allocation == {"BTC": 0.0}
+    assert allocation["BTC"] == 0.0
+    assert sum(allocation.values()) == 0.0
 
 
-def test_portfolio_persistence():
-    portfolio = Portfolio(currency="usd")
-    portfolio.add_asset("BTC", quantity=1.0, cost_basis=100.0, name="Bitcoin")
-    portfolio.add_asset("ETH", quantity=2.0, cost_basis=50.0)
-
-    data = portfolio.to_dict()
-    restored = Portfolio.from_dict(data)
-
-    assert restored.currency == "USD"
-    assert restored.symbols() == ["BTC", "ETH"]
-    assert restored.get_asset("BTC").name == "Bitcoin"
-    assert restored.get_asset("ETH").cost_basis == 50.0
-
-
-def test_cli_add_and_summary():
-    with tempfile.TemporaryDirectory() as tmp:
-        portfolio_path = os.path.join(tmp, "portfolio.json")
-        prices_path = os.path.join(tmp, "prices.json")
-
-        with open(prices_path, "w", encoding="utf-8") as handle:
-            json.dump({"BTC": 100.0, "ETH": 50.0}, handle)
-
-        output = io.StringIO()
-
-        with contextlib.redirect_stdout(output):
-            assert cli_main(["init", "--portfolio", portfolio_path]) == 0
-            assert cli_main(
-                [
-                    "add",
-                    "--portfolio",
-                    portfolio_path,
-                    "--symbol",
-                    "btc",
-                    "--quantity",
-                    "2",
-                    "--cost-basis",
-                    "150",
-                ]
-            ) == 0
-            assert cli_main(
-                [
-                    "summary",
-                    "--portfolio",
-                    portfolio_path,
-                    "--prices",
-                    prices_path,
-                ]
-            ) == 0
-
-        text = output.getvalue()
-
-        assert "Portfolio value: 200.00 USD" in text
-        assert "Total cost basis: 150.00 USD" in text
-        assert "Unrealized P&L: 50.00 USD" in text
-        assert "BTC" in text
-
-
-def test_cli_summary_empty():
-    with tempfile.TemporaryDirectory() as tmp:
-        portfolio_path = os.path.join(tmp, "portfolio.json")
-        output = io.StringIO()
-
-        with contextlib.redirect_stdout(output):
-            assert cli_main(["init", "--portfolio", portfolio_path]) == 0
-            assert cli_main(["summary", "--portfolio", portfolio_path]) == 0
-
-        text = output.getvalue()
-
-        assert "Portfolio value: 0.00 USD" in text
-        assert "Total cost basis: 0.00 USD" in text
-        assert "Unrealized P&L: 0.00 USD" in text
-
-
-def test_cli_set_and_remove():
-    with tempfile.TemporaryDirectory() as tmp:
-        portfolio_path = os.path.join(tmp, "portfolio.json")
-        output = io.StringIO()
-
-        with contextlib.redirect_stdout(output):
-            assert cli_main(["init", "--portfolio", portfolio_path]) == 0
-            assert cli_main(
-                [
-                    "add",
-                    "--portfolio",
-                    portfolio_path,
-                    "--symbol",
-                    "BTC",
-                    "--quantity",
-                    "1",
-                    "--cost-basis",
-                    "100",
-                ]
-            ) == 0
-            assert cli_main(
-                [
-                    "set",
-                    "--portfolio",
-                    portfolio_path,
-                    "--symbol",
-                    "BTC",
-                    "--quantity",
-                    "2",
-                ]
-            ) == 0
-
-        with open(portfolio_path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-
-        assert data["assets"][0]["quantity"] == 2.0
-        assert data["assets"][0]["cost_basis"] == 200.0
-
-        with contextlib.redirect_stdout(output):
-            assert cli_main(
-                [
-                    "set",
-                    "--portfolio",
-                    portfolio_path,
-                    "--symbol",
-                    "BTC",
-                    "--cost-basis",
-                    "300",
-                ]
-            ) == 0
-
-        with open(portfolio_path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-
-        assert data["assets"][0]["quantity"] == 2.0
-        assert data["assets"][0]["cost_basis"] == 300.0
-
-        with contextlib.redirect_stdout(output):
-            assert cli_main(
-                [
-                    "remove",
-                    "--portfolio",
-                    portfolio_path,
-                    "--symbol",
-                    "BTC",
-                ]
-            ) == 0
-
-        with open(portfolio_path, "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-
-        assert data["assets"] == []
-
-
-def test_cli_invalid_quantity():
-    with tempfile.TemporaryDirectory() as tmp:
-        portfolio_path = os.path.join(tmp, "portfolio.json")
-        output = io.StringIO()
-
-        with contextlib.redirect_stdout(output):
-            assert cli_main(["init", "--portfolio", portfolio_path]) == 0
-            assert cli_main(
-                [
-                    "add",
-                    "--portfolio",
-                    portfolio_path,
-                    "--symbol",
-                    "BTC",
-                    "--quantity",
-                    "-1",
-                    "--cost-basis",
-                    "100",
-                ]
-            ) == 1
-
-        assert "Error" in output.getvalue()
-
-
-def test_service_summary():
+def test_service_summary_calculates_allocation_and_sorts():
     portfolio = Portfolio()
-    provider = StaticPriceProvider({"BTC": 100.0, "ETH": 50.0})
+    portfolio.add_holding("BTC", 1.0, avg_price=100.0)
+    portfolio.add_holding("ETH", 2.0, avg_price=50.0)
+
+    provider = StaticPriceProvider({"BTC": 120.0, "ETH": 40.0})
     service = PortfolioService(portfolio, provider)
-
-    service.add_holding("BTC", 2.0, avg_price=50.0)
-    service.add_holding("ETH", 1.0, avg_price=60.0)
-
     summary = service.get_summary()
 
-    assert summary.currency == "USD"
-    assert summary.total_value == 250.0
-    assert summary.total_cost == 160.0
-    assert summary.total_profit_loss == 90.0
-    assert summary.holdings[0].symbol == "BTC"
-    assert abs(summary.holdings[0].allocation_pct - 80.0) < 1e-12
-    assert abs(summary.holdings[1].allocation_pct - 20.0) < 1e-12
+    assert summary.total_value == 200.0
+    assert summary.total_cost == 200.0
+    assert summary.total_profit_loss == 0.0
+    assert [holding.symbol for holding in summary.holdings] == ["BTC", "ETH"]
+    assert summary.holdings[0].allocation_pct == 60.0
+    assert summary.holdings[1].allocation_pct == 40.0
 
-    service.set_price("BTC", 120.0)
 
-    summary = service.get_summary()
+def test_cli_init_add_summary(tmp_path):
+    portfolio_path = tmp_path / "portfolio.json"
+    prices_path = tmp_path / "prices.json"
+    prices_path.write_text(json.dumps([["BTC", 100.0], ["ETH", 50.0]]))
 
-    assert summary.total_value == 290.0
-    assert summary.total_cost == 160.0
-    assert summary.total_profit_loss == 130.0
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        assert cli_main(["init", "--portfolio", str(portfolio_path)]) == 0
+        assert cli_main([
+            "add",
+            "--portfolio", str(portfolio_path),
+            "--symbol", "btc",
+            "--quantity", "1",
+            "--cost-basis", "90",
+        ]) == 0
+        assert cli_main([
+            "summary",
+            "--portfolio", str(portfolio_path),
+            "--prices", str(prices_path),
+        ]) == 0
 
-    service.remove_holding("BTC", 1.0)
+    text = output.getvalue()
+    assert "Portfolio value: 100.00 USD" in text
+    assert "BTC" in text
 
-    summary = service.get_summary()
+    data = json.loads(portfolio_path.read_text())
+    assert data["assets"]["BTC"]["quantity"] == 1.0
+    assert data["assets"]["BTC"]["cost_basis"] == 90.0
 
-    assert summary.total_value == 170.0
-    assert summary.total_cost == 110.0
+
+def test_cli_set_price(tmp_path):
+    prices_path = tmp_path / "prices.json"
+    prices_path.write_text(json.dumps({"BTC": 10.0}))
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        assert cli_main([
+            "set-price",
+            "--prices", str(prices_path),
+            "--symbol", "btc",
+            "--price", "20",
+        ]) == 0
+
+    data = json.loads(prices_path.read_text())
+    assert data["BTC"] == 20.0

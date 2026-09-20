@@ -1,24 +1,46 @@
 # Crypto Portfolio
 
-A small Python project for tracking a crypto portfolio.
+A small Python project for tracking a crypto portfolio with cost basis, valuation, profit/loss, and allocation.
 
-## Technologies
+## Technology Stack
 
-- Python 3.9+
-- Standard library only
-- `argparse` for the CLI
-- `json` for persistence
+- Python 3.8+
+- Standard library only for runtime behavior
 - `pytest` for tests
+- `setuptools` / `pyproject.toml` for packaging and CLI entry point
 
-## Core Features
+## Architecture
 
-- Initialize a portfolio file
-- Add, update, and remove assets
-- Set quantity and cost basis
-- Calculate total value, total cost basis, and unrealized P&L
-- Calculate allocation percentages
-- Use static prices from a JSON file or built-in sample prices
-- Persist portfolio state to JSON
+- `crypto_portfolio/models.py`
+  - Domain model: `Asset`, `Portfolio`, `AssetValue`, `PortfolioSummary`
+  - Symbol normalization and amount validation
+  - Portfolio persistence helpers via `to_dict` / `from_dict`
 
-## Project Structure
+- `crypto_portfolio/pricing.py`
+  - `PriceProvider` interface
+  - `StaticPriceProvider` for JSON-backed or in-memory prices
+  - `SamplePriceProvider` with deterministic sample prices
+
+- `crypto_portfolio/service.py`
+  - `PortfolioService` business logic
+  - Valuation, P&L, allocation, and summary generation
+
+- `crypto_portfolio/cli.py`
+  - Command-line interface
+  - Portfolio and price file persistence
+  - Commands: `init`, `add`, `remove`, `set-price`, `summary`
+
+- `tests/`
+  - Initial unit and CLI tests
+
+## Features
+
+- Add holdings by symbol, quantity, and cost basis or average price
+- Remove holdings fully or partially
+- Track total cost basis and average price
+- Calculate portfolio value, unrealized P&L, and allocation
+- Persist portfolio and price data as JSON
+- Use sample prices by default or provide a static price file
+
+## Build and Run
 
