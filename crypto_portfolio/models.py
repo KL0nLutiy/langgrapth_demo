@@ -125,65 +125,50 @@ class PortfolioSummary:
 
 
 class Portfolio:
-    def __init__(self, assets: Optional[Mapping[str, object]] = None, currency: str = "USD") -> None:
-        self.currency = str(currency or "USD")
+    def __init__(self, assets: Optional[List[Asset]] = None) -> None:
         self._assets: Dict[str, Asset] = {}
 
         if assets:
-            for symbol, asset in assets.items():
-                if isinstance(asset, Asset):
-                    self._assets[asset.symbol] = asset
-                elif isinstance(asset, Mapping):
-                    parsed = Asset.from_dict(asset)
-                    self._assets[parsed.symbol] = parsed
-                else:
-                    raise TypeError("Asset values must be Asset instances or mappings")
+            for asset in assets:
+                self._assets[asset.symbol] = asset
 
     @property
-    def assets(self) -> Dict[str, Asset]:
-        return dict(self._assets)
-
-    def get_assets(self) -> Dict[str, Asset]:
-        return dict(self._assets)
+    def assets(self) -> List[Asset]:
+        return [self._assets[symbol] for symbol in sorted(self._assets)]
 
     def symbols(self) -> List[str]:
         return sorted(self._assets)
 
     def get_asset(self, symbol: str) -> Optional[Asset]:
-        try:
-            normalized = normalize_symbol(symbol)
-        except ValueError:
-            return None
-        return self._assets.get(normalized)
-
-    def has_asset(self, symbol: str) -> bool:
-        return self.get_asset(symbol) is not None
+        return self._assets.get(normalize_symbol(symbol))
 
     def add_asset(
         self,
         symbol: str,
-        quantity: float = 0.0,
-        cost_basis: float = 0.0,
+        quantity: float,
+        cost_basis: float,
         name: Optional[str] = None,
     ) -> Asset:
         normalized = normalize_symbol(symbol)
         quantity = _validate_amount(quantity, "quantity")
         cost_basis = _validate_amount(cost_basis, "cost_basis")
 
-        asset = self._assets.get(normalized)
-        if asset is None:
-            asset = Asset(symbol=normalized, quantity=quantity, cost_basis=cost_basis, name=name)
+        existing = self._assets.get(normalized)
+        if existing is None:
+            asset = Asset(
+                symbol=normalized,
+                quantity=quantity,
+                cost_basis=cost_basis,
+                name=name,
+            )
             self._assets[normalized] = asset
-        else:
-            asset.quantity = _validate_amount(asset.quantity + quantity, "quantity")
-            asset.cost_basis = _validate_amount(asset.cost_basis + cost_basis, "cost_basis")
-            if name is not None:
-                asset.name = str(name)
+            return asset
 
-        if asset.quantity <= 0 and asset.cost_basis <= 0:
-            self._assets.pop(normalized, None)
-
-        return asset
+        existing.quantity += quantity
+        existing.cost_basis += cost_basis
+        if name is not None:
+            existing.name = str(name)
+        return existing
 
     def add_holding(
         self,
@@ -194,152 +179,84 @@ class Portfolio:
     ) -> Asset:
         quantity = _validate_amount(quantity, "quantity")
         avg_price = _validate_amount(avg_price, "avg_price")
-        return self.add_asset(symbol, quantity, quantity * avg_price, name=name)
+        return self.add_asset(
+            symbol,
+            quantity=quantity,
+            cost_basis=quantity * avg_price,
+            name=name,
+        )
 
-    def set_quantity(self, symbol: str, quantity: float) -> Optional[Asset]:
+    def set_quantity(self, symbol: str, quantity: float) -> Asset:
         normalized = normalize_symbol(symbol)
         quantity = _validate_amount(quantity, "quantity")
 
-        asset = self._assets.get(normalized)
-        if asset is None:
-            if quantity <= 0:
-                return None
-            asset = Asset(symbol=normalized, quantity=quantity)
-            self._assets[normalized] = asset
-            return asset
+        existing = self._assets.get(normalized)
+        if existing is None:
+            return self.add_asset(normalized, quantity=quantity, cost_basis=0.0)
 
-        if quantity <= 0:
-            self._assets.pop(normalized, None)
-            return None
-
-        if asset.quantity > 0:
-            asset.cost_basis = _validate_amount(asset.cost_basis * (quantity / asset.quantity), "cost_basis")
-
-        asset.quantity = quantity
-        return asset
-
-    def set_cost_basis(self, symbol: str, cost_basis: float) -> Optional[Asset]:
-        normalized = normalize_symbol(symbol)
-        cost_basis = _validate_amount(cost_basis, "cost_basis")
-
-        asset = self._assets.get(normalized)
-        if asset is None:
-            if cost_basis <= 0:
-                return None
-            asset = Asset(symbol=normalized, cost_basis=cost_basis)
-            self._assets[normalized] = asset
-            return asset
-
-        asset.cost_basis = cost_basis
-
-        if asset.quantity <= 0 and asset.cost_basis <= 0:
-            self._assets.pop(normalized, None)
-            return None
-
-        return asset
+        existing.quantity = quantity
+        if quantity == 0.0:
+            existing.cost_basis = 0.0
+        return existing
 
     def remove_asset(self, symbol: str) -> bool:
-        try:
-            normalized = normalize_symbol(symbol)
-        except ValueError:
-            return False
+        normalized = normalize_symbol(symbol)
         return self._assets.pop(normalized, None) is not None
 
-    def remove_quantity(self, symbol: str, quantity: float) -> bool:
-        normalized = normalize_symbol(symbol)
-        quantity = _validate_amount(quantity, "quantity")
-
-        asset = self._assets.get(normalized)
-        if asset is None:
-            return False
-
-        if quantity >= asset.quantity - 1e-12:
-            return self.remove_asset(normalized)
-
-        remaining = asset.quantity - quantity
-        if remaining <= 0:
-            return self.remove_asset(normalized)
-
-        if asset.quantity > 0:
-            asset.cost_basis = _validate_amount(asset.cost_basis * (remaining / asset.quantity), "cost_basis")
-
-        asset.quantity = remaining
-        return True
-
     def total_value(self, prices: Optional[object]) -> float:
-        total = 0.0
-        for symbol, asset in self._assets.items():
-            total += asset.value(_price_for(symbol, prices))
-        return total
+        return sum(
+            asset.value(_price_for(asset.symbol, prices))
+            for asset in self.assets
+        )
 
     def total_cost(self) -> float:
-        return sum(asset.cost_basis for asset in self._assets.values())
+        return sum(asset.cost_basis for asset in self.assets)
 
     def unrealized_pnl(self, prices: Optional[object]) -> float:
         return self.total_value(prices) - self.total_cost()
 
     def allocation(self, prices: Optional[object]) -> Dict[str, float]:
         total = self.total_value(prices)
-        result: Dict[str, float] = {}
+        if total <= 0:
+            return {asset.symbol: 0.0 for asset in self.assets}
 
-        for symbol, asset in self._assets.items():
-            value = asset.value(_price_for(symbol, prices))
-            result[symbol] = value / total if total > 0 else 0.0
-
-        return result
-
-    def value(self, prices: Optional[object]) -> float:
-        return self.total_value(prices)
-
-    def pnl(self, prices: Optional[object]) -> float:
-        return self.unrealized_pnl(prices)
-
-    def __contains__(self, symbol: str) -> bool:
-        return self.has_asset(symbol)
-
-    def __iter__(self):
-        return iter(self.symbols())
-
-    def __len__(self) -> int:
-        return len(self._assets)
-
-    def to_dict(self) -> Dict[str, object]:
-        data: Dict[str, object] = {
-            "assets": {symbol: asset.to_dict() for symbol, asset in sorted(self._assets.items())}
+        return {
+            asset.symbol: asset.value(_price_for(asset.symbol, prices)) / total
+            for asset in self.assets
         }
 
-        if self.currency and self.currency != "USD":
-            data["currency"] = self.currency
-
-        return data
+    def to_dict(self) -> Dict[str, object]:
+        return {
+            "assets": [asset.to_dict() for asset in self.assets],
+        }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, object]) -> "Portfolio":
-        if not isinstance(data, Mapping):
-            raise TypeError("Portfolio data must be a mapping")
-
-        currency = data.get("currency", "USD")
-        assets_data = data.get("assets", {})
-        if assets_data is None:
-            assets_data = {}
-
-        portfolio = cls(currency=currency)
-
-        if isinstance(assets_data, Mapping):
-            items = assets_data.items()
-        elif isinstance(assets_data, list):
-            items = [(None, asset) for asset in assets_data]
+    def from_dict(cls, data: object) -> "Portfolio":
+        if isinstance(data, Mapping):
+            raw_assets = data.get("assets", [])
+        elif isinstance(data, list):
+            raw_assets = data
         else:
-            raise TypeError("Portfolio assets must be a mapping or list")
+            raise TypeError("Portfolio data must be a mapping or list")
 
-        for symbol, asset_data in items:
-            if isinstance(asset_data, Asset):
-                asset = asset_data
-            elif isinstance(asset_data, Mapping):
-                asset = Asset.from_dict(asset_data)
-            else:
-                raise TypeError("Asset data must be a mapping")
+        if not isinstance(raw_assets, list):
+            raise TypeError("Portfolio assets must be a list")
 
-            portfolio._assets[asset.symbol] = asset
+        portfolio = cls()
+        for raw_asset in raw_assets:
+            if not isinstance(raw_asset, Mapping):
+                raise TypeError("Each portfolio asset must be a mapping")
+
+            asset = Asset.from_dict(raw_asset)
+            if asset.quantity == 0.0 and asset.cost_basis == 0.0:
+                portfolio._assets[asset.symbol] = asset
+                continue
+
+            portfolio.add_asset(
+                asset.symbol,
+                quantity=asset.quantity,
+                cost_basis=asset.cost_basis,
+                name=asset.name,
+            )
 
         return portfolio

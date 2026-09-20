@@ -100,177 +100,130 @@ def _print_summary(portfolio: Portfolio, provider: PriceProvider) -> None:
     )
 
     if not summary.holdings:
+        print("No holdings.")
         return
 
     print()
-    print(
-        f"{'Symbol':<8}{'Quantity':>12}{'Price':>12}{'Value':>12}"
-        f"{'Avg':>12}{'P&L':>12}{'Alloc':>10}"
-    )
-
+    print(f"{'Symbol':<8} {'Quantity':>12} {'Price':>12} {'Value':>12} {'P&L':>12} {'P&L%':>8} {'Alloc%':>8}")
     for holding in summary.holdings:
         print(
-            f"{holding.symbol:<8}"
-            f"{holding.quantity:>12.6f}"
-            f"{holding.price:>12.2f}"
-            f"{holding.value:>12.2f}"
-            f"{holding.avg_price:>12.2f}"
-            f"{holding.profit_loss:>12.2f}"
-            f"{holding.allocation_pct:>9.2f}%"
+            f"{holding.symbol:<8} "
+            f"{holding.quantity:>12.8f} "
+            f"{holding.price:>12.2f} "
+            f"{holding.value:>12.2f} "
+            f"{holding.profit_loss:>12.2f} "
+            f"{holding.profit_loss_pct:>8.2f} "
+            f"{holding.allocation_pct:>8.2f}"
         )
 
 
-def _error(message: str) -> None:
-    print(f"Error: {message}", file=sys.stderr)
+def _print_holdings(portfolio: Portfolio, provider: PriceProvider) -> None:
+    service = PortfolioService(portfolio, provider)
+    holdings = service.get_holdings()
+
+    if not holdings:
+        print("No holdings.")
+        return
+
+    print(f"{'Symbol':<8} {'Quantity':>12} {'Avg Price':>12} {'Price':>12} {'Value':>12}")
+    for holding in holdings:
+        print(
+            f"{holding.symbol:<8} "
+            f"{holding.quantity:>12.8f} "
+            f"{holding.avg_price:>12.2f} "
+            f"{holding.price:>12.2f} "
+            f"{holding.value:>12.2f}"
+        )
 
 
-def _add_global_options(parser: argparse.ArgumentParser, suppress: bool = False) -> None:
-    default = argparse.SUPPRESS if suppress else None
-    parser.add_argument("--portfolio", default=default, help="Path to the portfolio JSON file.")
-    parser.add_argument("--prices", default=default, help="Path to a static prices JSON file.")
+def _print_prices(provider: PriceProvider, symbols: Optional[List[str]] = None) -> None:
+    prices = provider.get_prices(symbols)
 
+    if not prices:
+        print("No prices.")
+        return
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="crypto-portfolio",
-        description="Track a crypto portfolio and calculate P&L.",
-    )
-    _add_global_options(parser, suppress=False)
-    subparsers = parser.add_subparsers(dest="command", metavar="command")
-
-    init_parser = subparsers.add_parser("init", aliases=["new", "create"], help="Create or reset a portfolio file.")
-    _add_global_options(init_parser, suppress=True)
-
-    add_parser = subparsers.add_parser("add", aliases=["buy"], help="Add or increase a holding.")
-    _add_global_options(add_parser, suppress=True)
-    add_parser.add_argument("symbol")
-    add_parser.add_argument("quantity_positional", nargs="?", type=float, default=None, metavar="quantity")
-    add_parser.add_argument("cost_basis_positional", nargs="?", type=float, default=None, metavar="cost_basis")
-    add_parser.add_argument("--quantity", type=float, default=None)
-    add_parser.add_argument("--cost-basis", type=float, default=None)
-    add_parser.add_argument("--price", type=float, default=None, help="Average price per unit; used when cost basis is omitted.")
-    add_parser.add_argument("--name", default=None)
-
-    remove_parser = subparsers.add_parser("remove", aliases=["sell"], help="Remove or decrease a holding.")
-    _add_global_options(remove_parser, suppress=True)
-    remove_parser.add_argument("symbol")
-    remove_parser.add_argument("quantity_positional", nargs="?", type=float, default=None, metavar="quantity")
-    remove_parser.add_argument("--quantity", type=float, default=None)
-    remove_parser.add_argument("--all", action="store_true", help="Remove the entire holding.")
-
-    set_parser = subparsers.add_parser("set", aliases=["update"], help="Set the quantity for a holding.")
-    _add_global_options(set_parser, suppress=True)
-    set_parser.add_argument("symbol")
-    set_parser.add_argument("quantity_positional", nargs="?", type=float, default=None, metavar="quantity")
-    set_parser.add_argument("--quantity", type=float, default=None)
-    set_parser.add_argument("--cost-basis", type=float, default=None)
-
-    summary_parser = subparsers.add_parser("summary", aliases=["show", "report", "status"], help="Print a portfolio summary.")
-    _add_global_options(summary_parser, suppress=True)
-
-    price_parser = subparsers.add_parser(
-        "price",
-        aliases=["set-price", "set_price", "price-set", "update-price", "update_price"],
-        help="Set a static price for a symbol.",
-    )
-    _add_global_options(price_parser, suppress=True)
-    price_parser.add_argument("symbol")
-    price_parser.add_argument("price_positional", nargs="?", type=float, default=None, metavar="price")
-    price_parser.add_argument("--price", type=float, default=None)
-
-    prices_parser = subparsers.add_parser(
-        "prices",
-        aliases=["list-prices", "list_prices", "list"],
-        help="List available static prices.",
-    )
-    _add_global_options(prices_parser, suppress=True)
-
-    return parser
+    print(f"{'Symbol':<8} {'Price':>12}")
+    for symbol in sorted(prices):
+        print(f"{symbol:<8} {prices[symbol]:>12.2f}")
 
 
 def _cmd_init(args: argparse.Namespace) -> int:
     path = _portfolio_path(args)
-    portfolio = Portfolio()
-    _save_portfolio(path, portfolio)
+    if os.path.exists(path):
+        print(f"Portfolio already exists: {path}", file=sys.stderr)
+        return 1
+
+    _save_portfolio(path, Portfolio())
     print(f"Initialized portfolio at {path}")
     return 0
 
 
 def _cmd_add(args: argparse.Namespace) -> int:
     path = _portfolio_path(args)
-
-    quantity = args.quantity if args.quantity is not None else args.quantity_positional
-    if quantity is None:
-        print("Error: quantity is required", file=sys.stderr)
-        return 2
-
-    cost_basis = args.cost_basis if args.cost_basis is not None else args.cost_basis_positional
-    if cost_basis is None:
-        if args.price is not None:
-            cost_basis = float(quantity) * float(args.price)
-        else:
-            cost_basis = 0.0
-
     portfolio = _load_portfolio(path)
-    asset = portfolio.add_asset(args.symbol, quantity=quantity, cost_basis=cost_basis, name=args.name)
+
+    try:
+        symbol = normalize_symbol(args.symbol)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    try:
+        quantity = float(args.quantity)
+        cost_basis = float(args.cost_basis)
+    except ValueError:
+        print("quantity and cost_basis must be numbers", file=sys.stderr)
+        return 1
+
+    portfolio.add_asset(symbol, quantity=quantity, cost_basis=cost_basis)
     _save_portfolio(path, portfolio)
-    print(f"Added {asset.quantity:.6f} {asset.symbol} (cost basis {asset.cost_basis:.2f})")
+    print(f"Added {symbol}")
+    return 0
+
+
+def _cmd_set_quantity(args: argparse.Namespace) -> int:
+    path = _portfolio_path(args)
+    portfolio = _load_portfolio(path)
+
+    try:
+        symbol = normalize_symbol(args.symbol)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    try:
+        quantity = float(args.quantity)
+    except ValueError:
+        print("quantity must be a number", file=sys.stderr)
+        return 1
+
+    if portfolio.get_asset(symbol) is None:
+        print(f"Holding not found: {symbol}", file=sys.stderr)
+        return 1
+
+    portfolio.set_quantity(symbol, quantity)
+    _save_portfolio(path, portfolio)
+    print(f"Updated {symbol} quantity to {quantity:.8f}")
     return 0
 
 
 def _cmd_remove(args: argparse.Namespace) -> int:
     path = _portfolio_path(args)
-    symbol = args.symbol
-    quantity = args.quantity if args.quantity is not None else args.quantity_positional
-
     portfolio = _load_portfolio(path)
-    asset = portfolio.get_asset(symbol)
-    display_symbol = str(symbol).strip().upper() or "UNKNOWN"
 
-    if asset is None:
-        print(f"No holdings found for {display_symbol}", file=sys.stderr)
+    try:
+        symbol = normalize_symbol(args.symbol)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
 
-    if getattr(args, "all", False) or quantity is None:
-        removed = asset.quantity
-        portfolio.remove_asset(symbol)
-    else:
-        quantity = float(quantity)
-        if quantity < 0:
-            raise ValueError("quantity must be a non-negative finite number")
-        if quantity > asset.quantity + 1e-12:
-            raise ValueError(f"Cannot remove {quantity:.6f} {asset.symbol}; only {asset.quantity:.6f} held")
-        removed = quantity
-        portfolio.remove_quantity(symbol, quantity)
+    if not portfolio.remove_asset(symbol):
+        print(f"Holding not found: {symbol}", file=sys.stderr)
+        return 1
 
     _save_portfolio(path, portfolio)
-    print(f"Removed {removed:.6f} {display_symbol}")
-    return 0
-
-
-def _cmd_set(args: argparse.Namespace) -> int:
-    path = _portfolio_path(args)
-    symbol = args.symbol
-    quantity = args.quantity if args.quantity is not None else args.quantity_positional
-
-    if quantity is None:
-        print("Error: quantity is required", file=sys.stderr)
-        return 2
-
-    portfolio = _load_portfolio(path)
-    asset = portfolio.set_quantity(symbol, quantity)
-
-    cost_basis = getattr(args, "cost_basis", None)
-    if cost_basis is not None:
-        asset = portfolio.set_cost_basis(symbol, cost_basis)
-
-    _save_portfolio(path, portfolio)
-    display_symbol = str(symbol).strip().upper() or "UNKNOWN"
-
-    if asset is None:
-        print(f"Removed {display_symbol}")
-    else:
-        print(f"Set {asset.symbol} quantity to {asset.quantity:.6f}")
+    print(f"Removed {symbol}")
     return 0
 
 
@@ -278,85 +231,89 @@ def _cmd_summary(args: argparse.Namespace) -> int:
     path = _portfolio_path(args)
     portfolio = _load_portfolio(path)
     provider = _load_price_provider(_prices_path(args))
+
     _print_summary(portfolio, provider)
     return 0
 
 
-def _cmd_price(args: argparse.Namespace) -> int:
-    path = _prices_path(args) or DEFAULT_PRICES_PATH
-    price = args.price if args.price is not None else args.price_positional
+def _cmd_list(args: argparse.Namespace) -> int:
+    path = _portfolio_path(args)
+    portfolio = _load_portfolio(path)
+    provider = _load_price_provider(_prices_path(args))
 
-    if price is None:
-        print("Error: price is required", file=sys.stderr)
-        return 2
-
-    provider = _load_price_provider(path)
-    if not isinstance(provider, StaticPriceProvider):
-        provider = StaticPriceProvider()
-
-    provider.set_price(args.symbol, price)
-    _save_price_provider(provider, path)
-    print(f"Set {normalize_symbol(args.symbol)} price to {float(price):.2f}")
+    _print_holdings(portfolio, provider)
     return 0
 
 
 def _cmd_prices(args: argparse.Namespace) -> int:
     provider = _load_price_provider(_prices_path(args))
-    symbols = provider.symbols()
+    symbols = [normalize_symbol(symbol) for symbol in args.symbols] if args.symbols else None
 
-    if not symbols:
-        print("No prices available.")
-        return 0
-
-    for symbol in symbols:
-        print(f"{symbol} {provider.get_price(symbol):.2f}")
+    _print_prices(provider, symbols)
     return 0
 
 
-def _dispatch(args: argparse.Namespace) -> int:
-    command = getattr(args, "command", None)
+def _cmd_export(args: argparse.Namespace) -> int:
+    path = _portfolio_path(args)
+    portfolio = _load_portfolio(path)
 
-    if command in {"init", "new", "create"}:
-        return _cmd_init(args)
-    if command in {"add", "buy"}:
-        return _cmd_add(args)
-    if command in {"remove", "sell"}:
-        return _cmd_remove(args)
-    if command in {"set", "update"}:
-        return _cmd_set(args)
-    if command in {"summary", "show", "report", "status"}:
-        return _cmd_summary(args)
-    if command in {"price", "set-price", "set_price", "price-set", "update-price", "update_price"}:
-        return _cmd_price(args)
-    if command in {"prices", "list-prices", "list_prices", "list"}:
-        return _cmd_prices(args)
+    if args.output:
+        with open(args.output, "w", encoding="utf-8") as handle:
+            json.dump(portfolio.to_dict(), handle, indent=2)
+            handle.write("\n")
+        print(f"Exported portfolio to {args.output}")
+    else:
+        print(json.dumps(portfolio.to_dict(), indent=2))
 
-    _error(f"Unknown command: {command}")
-    return 2
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="crypto-portfolio", description="Crypto portfolio tracker")
+    parser.add_argument("--portfolio", default=None, help="Path to portfolio JSON file")
+    parser.add_argument("--prices", default=None, help="Path to prices JSON file")
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    init_parser = subparsers.add_parser("init", help="Initialize a new portfolio file")
+    init_parser.set_defaults(func=_cmd_init)
+
+    add_parser = subparsers.add_parser("add", help="Add or increase a holding")
+    add_parser.add_argument("symbol")
+    add_parser.add_argument("quantity")
+    add_parser.add_argument("cost_basis")
+    add_parser.set_defaults(func=_cmd_add)
+
+    set_parser = subparsers.add_parser("set", help="Manage holding quantities")
+    set_subparsers = set_parser.add_subparsers(dest="set_command", required=True)
+
+    set_quantity_parser = set_subparsers.add_parser("quantity", help="Set a holding quantity")
+    set_quantity_parser.add_argument("symbol")
+    set_quantity_parser.add_argument("quantity")
+    set_quantity_parser.set_defaults(func=_cmd_set_quantity)
+
+    remove_parser = subparsers.add_parser("remove", help="Remove a holding")
+    remove_parser.add_argument("symbol")
+    remove_parser.set_defaults(func=_cmd_remove)
+
+    summary_parser = subparsers.add_parser("summary", help="Print portfolio summary")
+    summary_parser.set_defaults(func=_cmd_summary)
+
+    list_parser = subparsers.add_parser("list", help="List holdings")
+    list_parser.set_defaults(func=_cmd_list)
+
+    prices_parser = subparsers.add_parser("prices", help="Print prices")
+    prices_parser.add_argument("symbols", nargs="*")
+    prices_parser.set_defaults(func=_cmd_prices)
+
+    export_parser = subparsers.add_parser("export", help="Export portfolio JSON")
+    export_parser.add_argument("--output", default=None)
+    export_parser.set_defaults(func=_cmd_export)
+
+    return parser
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    parser = _build_parser()
-
-    try:
-        args = parser.parse_args(argv)
-    except SystemExit as exc:
-        code = exc.code
-        if code is None:
-            return 0
-        if isinstance(code, int):
-            return code
-        return 2
-
-    if not getattr(args, "command", None):
-        parser.print_help()
-        return 0
-
-    try:
-        return _dispatch(args)
-    except ValueError as exc:
-        _error(str(exc))
-        return 1
-    except (OSError, json.JSONDecodeError) as exc:
-        _error(str(exc))
-        return 1
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return int(args.func(args))

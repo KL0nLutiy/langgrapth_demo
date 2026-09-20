@@ -1,4 +1,4 @@
-from .models import Asset, AssetValue, Portfolio, PortfolioSummary, normalize_symbol
+from .models import Asset, AssetValue, Portfolio, PortfolioSummary
 from .pricing import PriceProvider, SamplePriceProvider, StaticPriceProvider
 from .service import PortfolioService
 
@@ -11,7 +11,4 @@ __all__ = [
     "PriceProvider",
     "SamplePriceProvider",
     "StaticPriceProvider",
-    "normalize_symbol",
 ]
-
-__version__ = "0.1.0"

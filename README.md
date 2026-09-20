@@ -1,25 +1,23 @@
 # Crypto Portfolio
 
-A small Python project for tracking a crypto portfolio, calculating value, cost basis, unrealized P&L, and allocation.
-
-## Technologies
-
-- Python 3.8+
-- Python standard library only
-- `pytest` for tests
-- `setuptools` packaging via `pyproject.toml`
+A small Python CLI for tracking a crypto portfolio with holdings, cost basis, prices, summary, and export.
 
 ## Features
 
-- Initialize or reset a portfolio JSON file
-- Add holdings with quantity and cost basis
-- Remove holdings fully or partially
-- Set holding quantity
-- Print a portfolio summary using sample or static prices
-- Manage static prices in a JSON file
-- CLI global options may appear before or after the subcommand
+- Initialize a local portfolio file
+- Add holdings with quantity and total cost basis
+- Update holding quantities
+- Remove holdings
+- List holdings
+- Print portfolio summary with value, cost basis, unrealized P&L, and allocation
+- Load static prices from JSON or use built-in sample prices
+- Export portfolio JSON
+
+## Technologies
+
+- Python 3.10+
+- Standard library only
+- `pytest` for tests
 
 ## Install
-
-For development:
 
