@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crypto-portfolio"
+version = "0.1.0"
+description = "A small CLI for tracking a crypto portfolio."
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+crypto-portfolio = "crypto_portfolio.cli:main"
+
+[tool.setuptools]
+packages = ["crypto_portfolio"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
