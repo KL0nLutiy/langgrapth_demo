@@ -1,83 +1,60 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List
 
 from .models import AssetValue, Portfolio, PortfolioSummary
 from .pricing import PriceProvider
 
 
 class PortfolioService:
-    """Business logic for portfolio operations and valuation."""
-
-    def __init__(
-        self,
-        portfolio: Portfolio,
-        price_provider: PriceProvider,
-        currency: Optional[str] = None,
-    ) -> None:
+    def __init__(self, portfolio: Portfolio, provider: PriceProvider) -> None:
         self.portfolio = portfolio
-        self.price_provider = price_provider
-        self.currency = currency or portfolio.currency or "USD"
-
-    def add_holding(
-        self,
-        symbol: str,
-        quantity: float,
-        avg_price: Optional[float] = None,
-    ) -> None:
-        self.portfolio.add_holding(symbol, quantity, avg_price)
-
-    def remove_holding(self, symbol: str, quantity: Optional[float] = None) -> None:
-        self.portfolio.remove_holding(symbol, quantity)
-
-    def set_price(self, symbol: str, price: float) -> None:
-        self.price_provider.set_price(symbol, price)
+        self.provider = provider
 
     def get_summary(self) -> PortfolioSummary:
-        holdings: List[AssetValue] = []
-        total_value = 0.0
-        total_cost = 0.0
+        symbols = self.portfolio.symbols()
+        prices = self.provider.get_prices(symbols)
 
-        for holding in self.portfolio.holdings:
-            price = self.price_provider.get_price(holding.symbol)
-            value = holding.quantity * price
-            cost = holding.cost_basis
-            profit_loss = value - cost
-            profit_loss_pct = (profit_loss / cost * 100.0) if cost > 0 else 0.0
+        total_value = 0.0
+        total_cost = self.portfolio.total_cost()
+        holdings: List[AssetValue] = []
+
+        for symbol in symbols:
+            asset = self.portfolio.get_asset(symbol)
+            if asset is None:
+                continue
+
+            price = float(prices.get(symbol, 0.0))
+            value = asset.value(price)
+            total_value += value
+
+            profit_loss = value - asset.cost_basis
+            profit_loss_pct = (profit_loss / asset.cost_basis * 100.0) if asset.cost_basis > 0 else 0.0
 
             holdings.append(
                 AssetValue(
-                    symbol=holding.symbol,
-                    quantity=holding.quantity,
+                    symbol=asset.symbol,
+                    quantity=asset.quantity,
                     price=price,
                     value=value,
-                    avg_price=holding.avg_price,
+                    avg_price=asset.avg_price,
                     profit_loss=profit_loss,
                     profit_loss_pct=profit_loss_pct,
                     allocation_pct=0.0,
                 )
             )
 
-            total_value += value
-            total_cost += cost
+        for holding in holdings:
+            holding.allocation_pct = (holding.value / total_value * 100.0) if total_value > 0 else 0.0
 
         total_profit_loss = total_value - total_cost
-        total_profit_loss_pct = (
-            (total_profit_loss / total_cost * 100.0) if total_cost > 0 else 0.0
-        )
-
-        for holding in holdings:
-            holding.allocation_pct = (
-                (holding.value / total_value * 100.0) if total_value > 0 else 0.0
-            )
-
-        holdings.sort(key=lambda item: item.value, reverse=True)
+        profit_loss_pct = (total_profit_loss / total_cost * 100.0) if total_cost > 0 else 0.0
 
         return PortfolioSummary(
-            currency=self.currency,
+            currency=self.portfolio.currency,
             total_value=total_value,
             total_cost=total_cost,
             total_profit_loss=total_profit_loss,
-            profit_loss_pct=total_profit_loss_pct,
+            profit_loss_pct=profit_loss_pct,
             holdings=holdings,
         )

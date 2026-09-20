@@ -1,46 +1,25 @@
 # Crypto Portfolio
 
-A small Python project for tracking a crypto portfolio with cost basis, valuation, profit/loss, and allocation.
+A small Python project for tracking a crypto portfolio, calculating value, cost basis, unrealized P&L, and allocation.
 
-## Technology Stack
+## Technologies
 
 - Python 3.8+
-- Standard library only for runtime behavior
+- Python standard library only
 - `pytest` for tests
-- `setuptools` / `pyproject.toml` for packaging and CLI entry point
-
-## Architecture
-
-- `crypto_portfolio/models.py`
-  - Domain model: `Asset`, `Portfolio`, `AssetValue`, `PortfolioSummary`
-  - Symbol normalization and amount validation
-  - Portfolio persistence helpers via `to_dict` / `from_dict`
-
-- `crypto_portfolio/pricing.py`
-  - `PriceProvider` interface
-  - `StaticPriceProvider` for JSON-backed or in-memory prices
-  - `SamplePriceProvider` with deterministic sample prices
-
-- `crypto_portfolio/service.py`
-  - `PortfolioService` business logic
-  - Valuation, P&L, allocation, and summary generation
-
-- `crypto_portfolio/cli.py`
-  - Command-line interface
-  - Portfolio and price file persistence
-  - Commands: `init`, `add`, `remove`, `set-price`, `summary`
-
-- `tests/`
-  - Initial unit and CLI tests
+- `setuptools` packaging via `pyproject.toml`
 
 ## Features
 
-- Add holdings by symbol, quantity, and cost basis or average price
+- Initialize or reset a portfolio JSON file
+- Add holdings with quantity and cost basis
 - Remove holdings fully or partially
-- Track total cost basis and average price
-- Calculate portfolio value, unrealized P&L, and allocation
-- Persist portfolio and price data as JSON
-- Use sample prices by default or provide a static price file
+- Set holding quantity
+- Print a portfolio summary using sample or static prices
+- Manage static prices in a JSON file
+- CLI global options may appear before or after the subcommand
 
-## Build and Run
+## Install
+
+For development:
 

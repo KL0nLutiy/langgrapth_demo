@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Iterable, Mapping, Optional
+from typing import Dict, Iterable, List, Mapping, Optional
 
 from .models import _validate_amount, normalize_symbol
 
@@ -9,7 +9,7 @@ class PriceProvider:
     def get_price(self, symbol: str) -> float:
         raise NotImplementedError
 
-    def get_prices(self, symbols: Iterable[str]) -> Dict[str, float]:
+    def get_prices(self, symbols: Optional[Iterable[str]]) -> Dict[str, float]:
         result: Dict[str, float] = {}
 
         if symbols is None:
@@ -27,6 +27,9 @@ class PriceProvider:
 
     def set_price(self, symbol: str, price: float) -> None:
         raise NotImplementedError
+
+    def symbols(self) -> List[str]:
+        return []
 
 
 class StaticPriceProvider(PriceProvider):
@@ -50,8 +53,11 @@ class StaticPriceProvider(PriceProvider):
     def set_price(self, symbol: str, price: float) -> None:
         self._prices[normalize_symbol(symbol)] = _validate_amount(price, "price")
 
+    def symbols(self) -> List[str]:
+        return sorted(self._prices)
+
     def to_dict(self) -> Dict[str, float]:
-        return dict(self._prices)
+        return {symbol: self._prices[symbol] for symbol in self.symbols()}
 
 
 class SamplePriceProvider(StaticPriceProvider):
