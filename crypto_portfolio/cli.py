@@ -14,6 +14,15 @@ DEFAULT_PORTFOLIO_PATH = "portfolio.json"
 DEFAULT_PRICES_PATH = "prices.json"
 
 
+class _CliError(Exception):
+    pass
+
+
+class _ArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise _CliError(message)
+
+
 def _resolve_paths(args: argparse.Namespace) -> tuple[str, Optional[str]]:
     portfolio = (
         getattr(args, "portfolio", None)
@@ -104,359 +113,301 @@ def _save_price_provider(provider: PriceProvider, path: str) -> None:
         handle.write("\n")
 
 
-def _print_json(data: Any) -> None:
-    print(json.dumps(data, indent=2))
+def _default_prices_path(portfolio_path: str) -> str:
+    directory = os.path.dirname(os.path.abspath(portfolio_path))
+    return os.path.join(directory, DEFAULT_PRICES_PATH)
 
 
-def _print_holdings_table(holdings: List[AssetValue]) -> None:
-    if not holdings:
-        print("No holdings.")
-        return
-
-    header = (
-        f"{'Asset':<10} {'Quantity':>12} {'Price':>12} {'Value':>12} "
-        f"{'Avg Price':>12} {'P/L':>12} {'P/L %':>10} {'Allocation %':>12}"
+def _add_common(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--portfolio",
+        dest="portfolio",
+        default=None,
+        help="Path to the portfolio JSON file.",
     )
-    print(header)
-
-    for holding in holdings:
-        print(
-            f"{holding.symbol:<10} "
-            f"{holding.quantity:>12.6f} "
-            f"{holding.price:>12.2f} "
-            f"{holding.value:>12.2f} "
-            f"{holding.avg_price:>12.2f} "
-            f"{holding.profit_loss:>12.2f} "
-            f"{holding.profit_loss_pct:>9.2f}% "
-            f"{holding.allocation_pct:>11.2f}%"
-        )
-
-
-def _error(message: str) -> None:
-    print(message, file=sys.stderr)
+    parser.add_argument(
+        "--prices",
+        dest="prices",
+        default=None,
+        help="Path to the prices JSON file.",
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="crypto-portfolio",
-        description="Track a crypto portfolio with CLI and web UI.",
-    )
-
+    parser = _ArgumentParser(prog="crypto-portfolio", description="Crypto portfolio tracker")
     parser.add_argument(
         "--portfolio",
         dest="global_portfolio",
         default=None,
-        help="Path to the portfolio JSON file",
+        help="Path to the portfolio JSON file.",
     )
     parser.add_argument(
         "--prices",
         dest="global_prices",
         default=None,
-        help="Path to the prices JSON file",
+        help="Path to the prices JSON file.",
     )
 
-    subparsers = parser.add_subparsers(dest="command")
+    sub = parser.add_subparsers(dest="command", metavar="command")
 
-    init_parser = subparsers.add_parser("init", help="Initialize portfolio and price files")
-    init_parser.add_argument("--portfolio", dest="portfolio", default=None)
-    init_parser.add_argument("--prices", dest="prices", default=None)
+    for name in ("init", "new"):
+        p = sub.add_parser(name, help="Initialize portfolio and prices files.")
+        _add_common(p)
+        p.add_argument("--currency", default="USD", help="Portfolio currency.")
 
-    summary_parser = subparsers.add_parser("summary", help="Show portfolio summary")
-    summary_parser.add_argument("--portfolio", dest="portfolio", default=None)
-    summary_parser.add_argument("--prices", dest="prices", default=None)
+    for name in ("add", "buy"):
+        p = sub.add_parser(name, help="Add or increase an asset.")
+        _add_common(p)
+        p.add_argument("--symbol", "-s", required=True, help="Asset symbol.")
+        p.add_argument("--quantity", "-q", type=float, default=0.0, help="Quantity to add.")
+        p.add_argument(
+            "--cost-basis",
+            "--cost",
+            dest="cost_basis",
+            type=float,
+            default=0.0,
+            help="Cost basis to add.",
+        )
+        p.add_argument(
+            "--avg-price",
+            "--avg",
+            dest="avg_price",
+            type=float,
+            default=None,
+            help="Average purchase price. If provided, cost basis is derived.",
+        )
 
-    holdings_parser = subparsers.add_parser("holdings", help="List holdings")
-    holdings_parser.add_argument("--portfolio", dest="portfolio", default=None)
-    holdings_parser.add_argument("--prices", dest="prices", default=None)
+    for name in ("set", "update"):
+        p = sub.add_parser(name, help="Set quantity for an existing asset.")
+        _add_common(p)
+        p.add_argument("--symbol", "-s", required=True, help="Asset symbol.")
+        p.add_argument("--quantity", "-q", type=float, required=True, help="New quantity.")
 
-    add_parser = subparsers.add_parser("add", help="Add or increase a holding")
-    add_parser.add_argument("symbol")
-    add_parser.add_argument("quantity")
-    add_parser.add_argument("--cost-basis", dest="cost_basis", default=None)
-    add_parser.add_argument("--avg-price", dest="avg_price", default=None)
-    add_parser.add_argument("--portfolio", dest="portfolio", default=None)
-    add_parser.add_argument("--prices", dest="prices", default=None)
+    for name in ("remove", "sell", "delete"):
+        p = sub.add_parser(name, help="Remove an asset or a quantity of an asset.")
+        _add_common(p)
+        p.add_argument("--symbol", "-s", required=True, help="Asset symbol.")
+        p.add_argument(
+            "--quantity",
+            "-q",
+            type=float,
+            default=None,
+            help="Optional quantity to remove. Omit to remove the whole asset.",
+        )
 
-    remove_parser = subparsers.add_parser("remove", help="Remove a holding")
-    remove_parser.add_argument("symbol")
-    remove_parser.add_argument("--portfolio", dest="portfolio", default=None)
-    remove_parser.add_argument("--prices", dest="prices", default=None)
+    for name in ("price", "set-price"):
+        p = sub.add_parser(name, help="Set a price for an asset.")
+        _add_common(p)
+        p.add_argument("--symbol", "-s", required=True, help="Asset symbol.")
+        p.add_argument("--price", "-p", type=float, required=True, help="Price value.")
 
-    set_parser = subparsers.add_parser("set", help="Set the quantity for a holding")
-    set_parser.add_argument("symbol")
-    set_parser.add_argument("quantity")
-    set_parser.add_argument("--portfolio", dest="portfolio", default=None)
-    set_parser.add_argument("--prices", dest="prices", default=None)
+    for name in ("portfolio", "list", "show"):
+        p = sub.add_parser(name, help="Show the portfolio.")
+        _add_common(p)
+        p.add_argument("--json", action="store_true", dest="as_json", help="Output JSON.")
 
-    price_parser = subparsers.add_parser("price", help="Get or set a price")
-    price_parser.add_argument("symbol")
-    price_parser.add_argument("price", nargs="?", default=None)
-    price_parser.add_argument("--portfolio", dest="portfolio", default=None)
-    price_parser.add_argument("--prices", dest="prices", default=None)
+    for name in ("prices", "price-list", "list-prices"):
+        p = sub.add_parser(name, help="Show known prices.")
+        _add_common(p)
+        p.add_argument("--json", action="store_true", dest="as_json", help="Output JSON.")
 
-    prices_parser = subparsers.add_parser("prices", help="List known prices")
-    prices_parser.add_argument("--portfolio", dest="portfolio", default=None)
-    prices_parser.add_argument("--prices", dest="prices", default=None)
+    for name in ("export", "dump"):
+        p = sub.add_parser(name, help="Export portfolio JSON.")
+        _add_common(p)
+        p.add_argument("--indent", type=int, default=2, help="JSON indent.")
 
-    export_parser = subparsers.add_parser("export", help="Export portfolio as JSON")
-    export_parser.add_argument("--portfolio", dest="portfolio", default=None)
-    export_parser.add_argument("--prices", dest="prices", default=None)
-
-    web_parser = subparsers.add_parser("web", help="Start the web UI")
-    web_parser.add_argument("--host", default="127.0.0.1")
-    web_parser.add_argument("--port", default="8000")
-    web_parser.add_argument("--portfolio", dest="portfolio", default=None)
-    web_parser.add_argument("--prices", dest="prices", default=None)
+    for name in ("serve", "web"):
+        p = sub.add_parser(name, help="Run the web server.")
+        _add_common(p)
+        p.add_argument("--host", default="127.0.0.1", help="Host to bind.")
+        p.add_argument("--port", type=int, default=8000, help="Port to bind.")
 
     return parser
 
 
-def _service_for(args: argparse.Namespace) -> PortfolioService:
-    portfolio_path, prices_path = _resolve_paths(args)
-    portfolio = _load_portfolio(portfolio_path)
-    provider = _load_price_provider(prices_path)
-    return PortfolioService(portfolio, provider)
+def _format_portfolio(summary: "PortfolioSummary") -> str:
+    lines = ["Portfolio"]
 
+    if not summary.holdings:
+        lines.append("No assets.")
+        return "\n".join(lines)
 
-def _cmd_init(args: argparse.Namespace) -> int:
-    portfolio_path, prices_path = _resolve_paths(args)
-    if not prices_path:
-        prices_path = DEFAULT_PRICES_PATH
-
-    portfolio = Portfolio(currency="USD")
-    _save_portfolio(portfolio_path, portfolio)
-
-    provider = StaticPriceProvider()
-    _save_price_provider(provider, prices_path)
-
-    return 0
-
-
-def _cmd_summary(args: argparse.Namespace) -> int:
-    service = _service_for(args)
-    _print_json(service.get_summary().to_dict())
-    return 0
-
-
-def _cmd_holdings(args: argparse.Namespace) -> int:
-    service = _service_for(args)
-    _print_holdings_table(service.get_holdings())
-    return 0
-
-
-def _cmd_add(args: argparse.Namespace) -> int:
-    portfolio_path, prices_path = _resolve_paths(args)
-
-    try:
-        normalized_symbol = normalize_symbol(args.symbol)
-        quantity = _validate_amount(args.quantity, "quantity")
-        cost_basis = (
-            _validate_amount(args.cost_basis, "cost_basis")
-            if args.cost_basis is not None
-            else 0.0
-        )
-        avg_price = (
-            _validate_amount(args.avg_price, "avg_price")
-            if args.avg_price is not None
-            else None
-        )
-    except ValueError as exc:
-        _error(str(exc))
-        return 1
-
-    portfolio = _load_portfolio(portfolio_path)
-
-    try:
-        portfolio.add_asset(
-            normalized_symbol,
-            quantity=quantity,
-            cost_basis=cost_basis,
-            avg_price=avg_price,
-        )
-    except ValueError as exc:
-        _error(str(exc))
-        return 1
-
-    _save_portfolio(portfolio_path, portfolio)
-
-    provider = _load_price_provider(prices_path)
-    service = PortfolioService(portfolio, provider)
-    _print_json(service.get_summary().to_dict())
-
-    return 0
-
-
-def _cmd_remove(args: argparse.Namespace) -> int:
-    portfolio_path, prices_path = _resolve_paths(args)
-
-    try:
-        normalized_symbol = normalize_symbol(args.symbol)
-    except ValueError as exc:
-        _error(str(exc))
-        return 1
-
-    portfolio = _load_portfolio(portfolio_path)
-
-    if not portfolio.remove_asset(normalized_symbol):
-        _error(f"No holding found for {normalized_symbol}")
-        return 1
-
-    _save_portfolio(portfolio_path, portfolio)
-
-    provider = _load_price_provider(prices_path)
-    service = PortfolioService(portfolio, provider)
-    _print_json(service.get_summary().to_dict())
-
-    return 0
-
-
-def _cmd_set(args: argparse.Namespace) -> int:
-    portfolio_path, prices_path = _resolve_paths(args)
-
-    try:
-        normalized_symbol = normalize_symbol(args.symbol)
-        quantity = _validate_amount(args.quantity, "quantity")
-    except ValueError as exc:
-        _error(str(exc))
-        return 1
-
-    portfolio = _load_portfolio(portfolio_path)
-
-    try:
-        portfolio.set_quantity(normalized_symbol, quantity)
-    except ValueError as exc:
-        _error(str(exc))
-        return 1
-
-    _save_portfolio(portfolio_path, portfolio)
-
-    provider = _load_price_provider(prices_path)
-    service = PortfolioService(portfolio, provider)
-    _print_json(service.get_summary().to_dict())
-
-    return 0
-
-
-def _cmd_price(args: argparse.Namespace) -> int:
-    portfolio_path, prices_path = _resolve_paths(args)
-
-    try:
-        normalized_symbol = normalize_symbol(args.symbol)
-    except ValueError as exc:
-        _error(str(exc))
-        return 1
-
-    provider = _load_price_provider(prices_path)
-
-    if args.price is not None:
-        try:
-            price = _validate_amount(args.price, "price")
-        except ValueError as exc:
-            _error(str(exc))
-            return 1
-
-        try:
-            provider.set_price(normalized_symbol, price)
-        except (ValueError, NotImplementedError) as exc:
-            _error(str(exc))
-            return 1
-
-        if not prices_path:
-            prices_path = DEFAULT_PRICES_PATH
-
-        _save_price_provider(provider, prices_path)
-
-    value = provider.get_price(normalized_symbol)
-    _print_json({normalized_symbol: value})
-
-    return 0
-
-
-def _cmd_prices(args: argparse.Namespace) -> int:
-    portfolio_path, prices_path = _resolve_paths(args)
-    provider = _load_price_provider(prices_path)
-
-    symbols = provider.symbols()
-    if not symbols:
-        portfolio = _load_portfolio(portfolio_path)
-        symbols = portfolio.symbols()
-
-    _print_json(provider.get_prices(symbols))
-
-    return 0
-
-
-def _cmd_export(args: argparse.Namespace) -> int:
-    portfolio_path, _ = _resolve_paths(args)
-    portfolio = _load_portfolio(portfolio_path)
-    _print_json(portfolio.to_dict())
-    return 0
-
-
-def _cmd_web(args: argparse.Namespace) -> int:
-    from .web import create_server
-
-    portfolio_path, prices_path = _resolve_paths(args)
-
-    try:
-        port = int(args.port)
-    except ValueError:
-        _error("port must be an integer")
-        return 1
-
-    server = create_server(
-        port=port,
-        host=args.host,
-        portfolio_path=portfolio_path,
-        prices_path=prices_path,
+    lines.append(
+        f"{'Symbol':<8} {'Quantity':>10} {'Price':>12} {'Value':>12} "
+        f"{'Cost':>12} {'PnL':>12} {'PnL%':>8} {'Alloc%':>8}"
     )
 
-    actual_port = server.server_address[1]
-    print(f"Web UI available at http://{args.host}:{actual_port}/")
+    for holding in summary.holdings:
+        lines.append(
+            f"{holding.symbol:<8} {holding.quantity:>10.4f} {holding.price:>12.2f} "
+            f"{holding.value:>12.2f} {holding.cost_basis:>12.2f} "
+            f"{holding.profit_loss:>12.2f} {holding.profit_loss_pct:>7.2f}% "
+            f"{holding.allocation_pct:>7.2f}%"
+        )
 
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
+    lines.append(
+        f"{'Total':<8} {'':>10} {'':>12} {summary.total_value:>12.2f} "
+        f"{summary.total_cost:>12.2f} {summary.total_profit_loss:>12.2f} "
+        f"{summary.profit_loss_pct:>7.2f}% {'100.00%':>8}"
+    )
 
-    return 0
+    return "\n".join(lines)
 
 
-_COMMANDS = {
-    "init": _cmd_init,
-    "summary": _cmd_summary,
-    "holdings": _cmd_holdings,
-    "add": _cmd_add,
-    "remove": _cmd_remove,
-    "set": _cmd_set,
-    "price": _cmd_price,
-    "prices": _cmd_prices,
-    "export": _cmd_export,
-    "web": _cmd_web,
-}
+def _format_prices(prices: Dict[str, float]) -> str:
+    lines = ["Portfolio Prices"]
+
+    if not prices:
+        lines.append("No prices.")
+        return "\n".join(lines)
+
+    lines.append(f"{'Symbol':<8} {'Price':>12}")
+
+    for symbol in sorted(prices):
+        lines.append(f"{symbol:<8} {float(prices[symbol]):>12.2f}")
+
+    return "\n".join(lines)
+
+
+def _dispatch(args: argparse.Namespace) -> int:
+    portfolio_path, prices_path = _resolve_paths(args)
+    command = getattr(args, "command", None)
+
+    if command in {"init", "new"}:
+        portfolio = Portfolio(currency=getattr(args, "currency", "USD"))
+        _save_portfolio(portfolio_path, portfolio)
+
+        if prices_path is None:
+            prices_path = _default_prices_path(portfolio_path)
+
+        _save_price_provider(StaticPriceProvider(), prices_path)
+
+        print(f"Initialized portfolio at {portfolio_path}")
+        print(f"Initialized prices at {prices_path}")
+        return 0
+
+    portfolio = _load_portfolio(portfolio_path)
+    provider = _load_price_provider(prices_path)
+    service = PortfolioService(portfolio, provider)
+
+    if command in {"add", "buy"}:
+        asset = service.add_asset(args.symbol, args.quantity, args.cost_basis, args.avg_price)
+        _save_portfolio(portfolio_path, portfolio)
+        print(
+            f"Added {asset.symbol}: quantity={asset.quantity:.4f} "
+            f"cost_basis={asset.cost_basis:.2f}"
+        )
+        return 0
+
+    if command in {"set", "update"}:
+        ok = service.set_quantity(args.symbol, args.quantity)
+        if not ok:
+            raise _CliError(f"asset {normalize_symbol(args.symbol)} not found")
+
+        _save_portfolio(portfolio_path, portfolio)
+
+        if float(args.quantity) <= 0:
+            print(f"Removed {normalize_symbol(args.symbol)}")
+        else:
+            print(f"Set {normalize_symbol(args.symbol)} quantity to {float(args.quantity):.4f}")
+
+        return 0
+
+    if command in {"remove", "sell", "delete"}:
+        ok = service.remove_asset(args.symbol, args.quantity)
+        if not ok:
+            raise _CliError(f"asset {normalize_symbol(args.symbol)} not found")
+
+        _save_portfolio(portfolio_path, portfolio)
+
+        if args.quantity is not None and float(args.quantity) <= 0:
+            print(f"No change for {normalize_symbol(args.symbol)}")
+        else:
+            print(f"Removed {normalize_symbol(args.symbol)}")
+
+        return 0
+
+    if command in {"price", "set-price"}:
+        service.set_price(args.symbol, args.price)
+
+        if prices_path is None:
+            prices_path = _default_prices_path(portfolio_path)
+
+        _save_price_provider(provider, prices_path)
+        print(f"Set price for {normalize_symbol(args.symbol)} to {float(args.price):.2f}")
+        return 0
+
+    if command in {"portfolio", "list", "show"}:
+        summary = service.get_summary()
+
+        if getattr(args, "as_json", False):
+            print(json.dumps(summary.to_dict(), indent=2))
+        else:
+            print(_format_portfolio(summary))
+
+        return 0
+
+    if command in {"prices", "price-list", "list-prices"}:
+        symbols = provider.symbols()
+        prices = service.get_prices(symbols) if symbols else {}
+
+        if getattr(args, "as_json", False):
+            print(json.dumps(prices, indent=2))
+        else:
+            print(_format_prices(prices))
+
+        return 0
+
+    if command in {"export", "dump"}:
+        print(json.dumps(portfolio.to_dict(), indent=getattr(args, "indent", 2)))
+        return 0
+
+    if command in {"serve", "web"}:
+        from .web import create_server
+
+        server = create_server(
+            host=args.host,
+            port=args.port,
+            portfolio_path=portfolio_path,
+            prices_path=prices_path,
+        )
+        print(f"Serving on http://{args.host}:{server.server_address[1]}")
+
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            server.server_close()
+
+        return 0
+
+    raise _CliError(f"unknown command {command}")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    if argv is None:
-        argv = sys.argv[1:]
-
     parser = _build_parser()
 
     try:
         args = parser.parse_args(argv)
+    except _CliError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
     except SystemExit as exc:
         return int(exc.code or 0)
 
-    command = getattr(args, "command", None)
-    if not command:
-        parser.print_help()
-        return 0
-
-    handler = _COMMANDS.get(command)
-    if handler is None:
+    if not getattr(args, "command", None):
         parser.print_help(sys.stderr)
         return 2
 
-    return handler(args)
+    try:
+        return _dispatch(args)
+    except _CliError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1

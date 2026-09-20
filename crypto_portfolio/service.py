@@ -16,8 +16,8 @@ class PortfolioService:
         if asset is None:
             return None
 
-        price = self.provider.get_price(asset.symbol)
-        value = asset.value(price)
+        price = float(self.provider.get_price(asset.symbol) or 0.0)
+        value = asset.quantity * price
         cost = asset.cost_basis
         profit_loss = value - cost
 
@@ -71,6 +71,8 @@ class PortfolioService:
             holdings=holdings,
         )
 
+    summary = get_summary
+
     def get_prices(self, symbols: Optional[List[str]] = None) -> Dict[str, float]:
         if symbols is None:
             symbols = self.portfolio.symbols()
@@ -95,30 +97,24 @@ class PortfolioService:
             quantity = _validate_amount(quantity, "quantity")
             cost_basis = _validate_amount(cost_basis, "cost_basis")
 
-        return self.portfolio.add_asset(
-            symbol,
-            quantity=quantity,
-            cost_basis=cost_basis,
-        )
+        return self.portfolio.add_asset(symbol, quantity, cost_basis)
 
-    def add_holding(
-        self,
-        symbol: str,
-        quantity: float,
-        avg_price: Optional[float] = None,
-        cost_basis: Optional[float] = None,
-    ) -> Asset:
-        if avg_price is not None:
-            return self.add_asset(symbol, quantity=quantity, avg_price=avg_price)
-        if cost_basis is not None:
-            return self.add_asset(symbol, quantity=quantity, cost_basis=cost_basis)
-        return self.add_asset(symbol, quantity=quantity)
+    def add_holding(self, symbol: str, quantity: float, avg_price: float) -> Asset:
+        return self.add_asset(symbol, quantity, avg_price=avg_price)
 
-    def set_quantity(self, symbol: str, quantity: float) -> Optional[Asset]:
+    def set_quantity(self, symbol: str, quantity: float) -> bool:
+        quantity = _validate_amount(quantity, "quantity")
         return self.portfolio.set_quantity(symbol, quantity)
 
-    def remove_asset(self, symbol: str) -> bool:
-        return self.portfolio.remove_asset(symbol)
+    def remove_asset(self, symbol: str, quantity: Optional[float] = None) -> bool:
+        if quantity is not None:
+            quantity = _validate_amount(quantity, "quantity")
+
+        return self.portfolio.remove_asset(symbol, quantity)
+
+    def remove_quantity(self, symbol: str, quantity: float) -> bool:
+        return self.remove_asset(symbol, quantity)
 
     def set_price(self, symbol: str, price: float) -> None:
+        price = _validate_amount(price, "price")
         self.provider.set_price(symbol, price)

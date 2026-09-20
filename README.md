@@ -1,15 +1,24 @@
 # Crypto Portfolio
 
-A small Python project for tracking a crypto portfolio with a CLI and a local web UI.
+A small Python project for tracking a crypto portfolio.
+
+## Technologies
+
+- Python 3.9+
+- Standard library only
+- `argparse` for the CLI
+- `http.server` for the web UI/API
+- `pytest` for tests
 
 ## Features
 
-- Add, update, and remove holdings
+- Add, update, and remove crypto assets
 - Track quantity and cost basis
-- Calculate value, P/L, and allocation
-- Static price storage with sample prices fallback
-- CLI for common portfolio operations
-- Local web UI and JSON API
+- Store static prices
+- Calculate value, PnL, and allocation
+- CLI for portfolio management
+- JSON export
+- Simple web UI and JSON API
 
-## Setup
+## CLI
 
