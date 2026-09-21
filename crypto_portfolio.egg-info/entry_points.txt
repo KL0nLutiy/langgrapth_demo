@@ -1,0 +1,2 @@
+[console_scripts]
+crypto-portfolio = crypto_portfolio.cli:main
