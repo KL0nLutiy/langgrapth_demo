@@ -1,22 +1,26 @@
 # Crypto Portfolio
 
-A small Python project for tracking a crypto portfolio.
+A small Python project for tracking a crypto portfolio, calculating total value, P/L, and allocation, and exposing a minimal web UI plus JSON API.
 
 ## Technology stack
 
-- Python 3.9+
-- Standard library only for runtime code
+- Python 3.10+
+- Standard library only:
+  - `http.server` for the web UI/API
+  - `argparse` for the CLI
+  - `json` for persistence
 - `pytest` for tests
-- `setuptools` packaging metadata
 
-## Features
+## Project layout
 
-- Add, update, and remove portfolio assets
-- Track quantity, cost basis, and average price
-- Store prices in a local JSON file
-- Calculate total value, total cost, profit/loss, and allocation
-- CLI for portfolio management
-- Local web UI and JSON API
+- `crypto_portfolio/`
+  - `__init__.py`: core domain model and service
+  - `cli.py`: command-line interface
+  - `web.py`: HTTP server, JSON API, and UI
+  - `models.py`, `pricing.py`, `service.py`: compatibility re-exports
+- `tests/`
+  - `test_portfolio.py`
+  - `test_web.py`
 
 ## CLI usage
 
