@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Mapping, Optional
+import math
+from collections.abc import Mapping
+from typing import Any, Dict, List, Optional
 
 from .models import _validate_amount, normalize_symbol
 
@@ -9,22 +11,17 @@ class PriceProvider:
     def get_price(self, symbol: str) -> float:
         raise NotImplementedError
 
-    def get_prices(self, symbols: Optional[Iterable[str]]) -> Dict[str, float]:
+    def get_prices(self, symbols: Optional[List[str]] = None) -> Dict[str, float]:
         result: Dict[str, float] = {}
 
-        if symbols is None:
-            return result
-
-        if isinstance(symbols, str):
-            symbols = [symbols]
-
-        for symbol in symbols:
+        for symbol in symbols or []:
             try:
                 normalized = normalize_symbol(symbol)
             except ValueError:
                 continue
 
-            result[normalized] = self.get_price(normalized)
+            if normalized not in result:
+                result[normalized] = self.get_price(normalized)
 
         return result
 
@@ -36,28 +33,32 @@ class PriceProvider:
 
 
 class StaticPriceProvider(PriceProvider):
-    def __init__(self, prices: Optional[object] = None) -> None:
+    def __init__(self, prices: Optional[Any] = None) -> None:
         self._prices: Dict[str, float] = {}
 
-        if not prices:
+        if prices is None:
             return
 
         if isinstance(prices, Mapping):
             items = list(prices.items())
-        else:
-            items = prices
-
-        for item in items:
-            try:
+        elif isinstance(prices, (list, tuple)):
+            items = []
+            for item in prices:
                 if isinstance(item, Mapping):
                     symbol = item.get("symbol")
                     price = item.get("price")
                     if symbol is not None and price is not None:
-                        self.set_price(symbol, price)
-                else:
-                    symbol, price = item
-                    self.set_price(symbol, price)
-            except (TypeError, ValueError):
+                        items.append((symbol, price))
+                elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                    items.append((item[0], item[1]))
+        else:
+            return
+
+        for symbol, price in items:
+            try:
+                normalized = normalize_symbol(symbol)
+                self._prices[normalized] = _validate_amount(price, "price")
+            except ValueError:
                 continue
 
     def get_price(self, symbol: str) -> float:
@@ -66,31 +67,42 @@ class StaticPriceProvider(PriceProvider):
         except ValueError:
             return 0.0
 
-        return self._prices.get(normalized, 0.0)
+        return float(self._prices.get(normalized, 0.0))
 
     def set_price(self, symbol: str, price: float) -> None:
-        self._prices[normalize_symbol(symbol)] = _validate_amount(price, "price")
+        normalized = normalize_symbol(symbol)
+        self._prices[normalized] = _validate_amount(price, "price")
 
     def symbols(self) -> List[str]:
         return sorted(self._prices)
 
-    def to_dict(self) -> Dict[str, float]:
-        return {symbol: self._prices[symbol] for symbol in self.symbols()}
-
 
 class SamplePriceProvider(StaticPriceProvider):
-    def __init__(self) -> None:
-        super().__init__(
-            {
-                "BTC": 65000.0,
-                "ETH": 3500.0,
-                "SOL": 150.0,
-                "ADA": 0.5,
-                "DOGE": 0.1,
-                "LTC": 80.0,
-                "XRP": 0.6,
-                "DOT": 7.0,
-                "AVAX": 35.0,
-                "LINK": 15.0,
-            }
-        )
+    SAMPLE_PRICES: Dict[str, float] = {
+        "BTC": 120.0,
+        "ETH": 30.0,
+        "SOL": 10.0,
+        "ADA": 0.5,
+        "DOGE": 0.1,
+        "LTC": 50.0,
+        "XRP": 0.5,
+        "DOT": 5.0,
+        "AVAX": 20.0,
+        "LINK": 15.0,
+    }
+
+    def __init__(self, prices: Optional[Any] = None) -> None:
+        merged = dict(self.SAMPLE_PRICES)
+
+        if prices is not None:
+            if isinstance(prices, Mapping):
+                for symbol, price in prices.items():
+                    try:
+                        merged[normalize_symbol(symbol)] = _validate_amount(price, "price")
+                    except ValueError:
+                        continue
+            else:
+                temp = StaticPriceProvider(prices)
+                merged.update(temp._prices)
+
+        super().__init__(merged)

@@ -1,115 +1,304 @@
 from __future__ import annotations
 
-import html
 import json
 import os
-import socketserver
-import urllib.parse
-from functools import partial
-from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, Dict, Optional
+import threading
+from collections.abc import Mapping
+from http.server import BaseHTTPRequestHandler
+from urllib.parse import unquote, urlsplit
 
-from .cli import (
-    DEFAULT_PORTFOLIO_PATH,
-    DEFAULT_PRICES_PATH,
-    _load_portfolio,
-    _load_price_provider,
-    _save_portfolio,
-    _save_price_provider,
-)
-from .models import PortfolioSummary
+try:
+    from http.server import ThreadingHTTPServer
+except ImportError:  # pragma: no cover - fallback for older Python versions
+    from http.server import HTTPServer as ThreadingHTTPServer
+
+from .models import Portfolio, _validate_amount, normalize_symbol
+from .pricing import PriceProvider, SamplePriceProvider, StaticPriceProvider
 from .service import PortfolioService
 
+_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Crypto Portfolio</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; background: #f7f9fc; color: #1f2933; }
+    h1 { margin-bottom: 0.25rem; }
+    .card { background: #fff; border: 1px solid #e4e7eb; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #e4e7eb; }
+    button { background: #2563eb; color: white; border: 0; border-radius: 6px; padding: 0.5rem 0.75rem; cursor: pointer; }
+    input { padding: 0.4rem; border: 1px solid #cbd2d9; border-radius: 6px; margin-right: 0.5rem; }
+    .summary span { margin-right: 1.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Crypto Portfolio</h1>
 
-class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
-    daemon_threads = True
-    allow_reuse_address = True
+  <div class="card" id="summary">Loading summary...</div>
 
+  <div class="card">
+    <h2>Holdings</h2>
+    <table id="holdings">
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Quantity</th>
+          <th>Avg Price</th>
+          <th>Price</th>
+          <th>Value</th>
+          <th>P/L</th>
+          <th>Allocation</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
 
-_STYLE = """
-<style>
-body { font-family: Arial, Helvetica, sans-serif; margin: 24px; color: #1f2933; }
-table { border-collapse: collapse; width: 100%; max-width: 960px; }
-th, td { border: 1px solid #cbd2d9; padding: 8px 10px; text-align: right; }
-th:first-child, td:first-child { text-align: left; }
-h1, h2 { margin-bottom: 12px; }
-</style>
-"""
+  <div class="card">
+    <h2>Add Asset</h2>
+    <form id="add-form">
+      <input name="symbol" placeholder="Symbol" required>
+      <input name="quantity" type="number" step="any" placeholder="Quantity" required>
+      <input name="avg_price" type="number" step="any" placeholder="Avg price">
+      <button type="submit">Add</button>
+    </form>
+  </div>
 
-_SCRIPT = """
-<script>
-async function refresh() {
-  try {
-    const response = await fetch('/api/portfolio');
-    const data = await response.json();
-    const element = document.getElementById('total-value');
-    if (element) {
-      element.textContent = Number(data.total_value || 0).toFixed(2);
+  <div class="card">
+    <h2>Set Price</h2>
+    <form id="price-form">
+      <input name="symbol" placeholder="Symbol" required>
+      <input name="price" type="number" step="any" placeholder="Price" required>
+      <button type="submit">Set Price</button>
+    </form>
+  </div>
+
+  <script>
+    async function fetchJSON(url, options) {
+      const response = await fetch(url, options);
+      return response.json();
     }
-  } catch (error) {
-    console.error(error);
-  }
-}
-refresh();
-</script>
+
+    function format(value) {
+      return Number(value || 0).toFixed(2);
+    }
+
+    async function load() {
+      const summary = await fetchJSON('/api/summary');
+      document.getElementById('summary').innerHTML =
+        `<span>Total value: ${format(summary.total_value)} ${summary.currency}</span>` +
+        `<span>Total cost: ${format(summary.total_cost)} ${summary.currency}</span>` +
+        `<span>Profit/Loss: ${format(summary.total_profit_loss)} ${summary.currency} (${format(summary.profit_loss_pct)}%)</span>`;
+
+      const holdings = await fetchJSON('/api/holdings');
+      const tbody = document.querySelector('#holdings tbody');
+      tbody.innerHTML = '';
+
+      holdings.forEach((holding) => {
+        const row = document.createElement('tr');
+        row.innerHTML =
+          `<td>${holding.symbol}</td>` +
+          `<td>${holding.quantity}</td>` +
+          `<td>${format(holding.avg_price)}</td>` +
+          `<td>${format(holding.price)}</td>` +
+          `<td>${format(holding.value)}</td>` +
+          `<td>${format(holding.profit_loss)}</td>` +
+          `<td>${format(holding.allocation_pct)}%</td>` +
+          `<td><button data-symbol="${holding.symbol}">Remove</button></td>`;
+        tbody.appendChild(row);
+      });
+
+      document.querySelectorAll('#holdings button').forEach((button) => {
+        button.addEventListener('click', async () => {
+          await fetchJSON(`/api/assets/${button.dataset.symbol}`, { method: 'DELETE' });
+          load();
+        });
+      });
+    }
+
+    document.getElementById('add-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.target;
+      const payload = {
+        symbol: form.symbol.value,
+        quantity: Number(form.quantity.value),
+        avg_price: form.avg_price.value ? Number(form.avg_price.value) : undefined
+      };
+
+      await fetchJSON('/api/assets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      form.reset();
+      load();
+    });
+
+    document.getElementById('price-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.target;
+
+      await fetchJSON('/api/prices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: form.symbol.value,
+          price: Number(form.price.value)
+        })
+      });
+
+      form.reset();
+      load();
+    });
+
+    load();
+  </script>
+</body>
+</html>
 """
 
 
-class PortfolioRequestHandler(BaseHTTPRequestHandler):
-    server_version = "CryptoPortfolio/0.1"
+def _load_portfolio(path: str | None) -> Portfolio:
+    if not path or not os.path.exists(path):
+        return Portfolio()
 
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            content = handle.read()
+
+        if not content.strip():
+            return Portfolio()
+
+        data = json.loads(content)
+        return Portfolio.from_dict(data)
+    except Exception:
+        return Portfolio()
+
+
+def _save_portfolio(path: str | None, portfolio: Portfolio) -> None:
+    if not path:
+        return
+
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(portfolio.to_dict(), handle, indent=2)
+        handle.write("\n")
+
+
+def _normalize_prices(data: object) -> object:
+    if isinstance(data, Mapping):
+        if "prices" in data and isinstance(data.get("prices"), (Mapping, list, tuple)):
+            return _normalize_prices(data.get("prices"))
+
+        prices = {}
+        for symbol, price in data.items():
+            try:
+                prices[normalize_symbol(symbol)] = _validate_amount(price, "price")
+            except ValueError:
+                continue
+
+        return prices
+
+    if isinstance(data, list):
+        prices = {}
+
+        for item in data:
+            if isinstance(item, Mapping):
+                symbol = item.get("symbol")
+                price = item.get("price")
+                if symbol is not None and price is not None:
+                    try:
+                        prices[normalize_symbol(symbol)] = _validate_amount(price, "price")
+                    except ValueError:
+                        continue
+            elif isinstance(item, (list, tuple)) and len(item) >= 2:
+                try:
+                    prices[normalize_symbol(item[0])] = _validate_amount(item[1], "price")
+                except ValueError:
+                    continue
+
+        return prices
+
+    return {}
+
+
+def _load_price_provider(path: str | None) -> PriceProvider:
+    if not path or not os.path.exists(path):
+        return SamplePriceProvider()
+
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            content = handle.read()
+
+        if not content.strip():
+            return StaticPriceProvider()
+
+        data = json.loads(content)
+        return StaticPriceProvider(_normalize_prices(data))
+    except Exception:
+        return StaticPriceProvider()
+
+
+def _save_price_provider(path: str | None, provider: PriceProvider) -> None:
+    if not path:
+        return
+
+    prices = {symbol: provider.get_price(symbol) for symbol in provider.symbols()}
+
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(prices, handle, indent=2)
+        handle.write("\n")
+
+
+class _PortfolioHTTPServer(ThreadingHTTPServer):
     def __init__(
         self,
-        *args: Any,
-        portfolio_path: str = DEFAULT_PORTFOLIO_PATH,
-        prices_path: Optional[str] = None,
-        service: Optional[PortfolioService] = None,
-        **kwargs: Any,
+        server_address: tuple[str, int],
+        handler_class: type[BaseHTTPRequestHandler],
+        portfolio_path: str | None,
+        prices_path: str | None,
     ) -> None:
+        super().__init__(server_address, handler_class)
         self.portfolio_path = portfolio_path
         self.prices_path = prices_path
-        self._injected_service = service
-        super().__init__(*args, **kwargs)
+        self.lock = threading.Lock()
+        self.portfolio = _load_portfolio(portfolio_path)
+        self.provider = _load_price_provider(prices_path)
 
-    def log_message(self, format: str, *args: Any) -> None:
-        return None
 
-    def _service(self) -> PortfolioService:
-        if self._injected_service is not None:
-            return self._injected_service
+class _Handler(BaseHTTPRequestHandler):
+    server_version = "CryptoPortfolio/0.1"
 
-        portfolio = _load_portfolio(self.portfolio_path)
-        provider = _load_price_provider(self.prices_path)
-        return PortfolioService(portfolio, provider)
+    def log_message(self, format: str, *args: object) -> None:
+        return
 
-    def _all_prices(self, service: PortfolioService) -> Dict[str, float]:
-        symbols = service.provider.symbols()
-        if symbols:
-            return service.get_prices(symbols)
-        return {}
-
-    def _send_json(self, payload: Any, status: int = 200) -> None:
-        body = json.dumps(payload, indent=2).encode("utf-8")
+    def _send_json(self, payload: object, status: int = 200) -> None:
+        body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_html(self, html_text: str, status: int = 200) -> None:
-        body = html_text.encode("utf-8")
-        self.send_response(status)
+    def _send_html(self, html: str) -> None:
+        body = html.encode("utf-8")
+        self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
-    def _read_json(self) -> Any:
-        try:
-            length = int(self.headers.get("Content-Length") or 0)
-        except (TypeError, ValueError):
-            length = 0
-
+    def _read_json(self) -> dict:
+        length = int(self.headers.get("Content-Length") or 0)
         if length <= 0:
             return {}
 
@@ -118,211 +307,144 @@ class PortfolioRequestHandler(BaseHTTPRequestHandler):
             return {}
 
         try:
-            return json.loads(raw.decode("utf-8"))
+            data = json.loads(raw.decode("utf-8"))
         except Exception:
             return {}
 
-    def _normalize_path(self, path: str) -> str:
-        if len(path) > 1:
-            path = path.rstrip("/")
-        if not path:
-            path = "/"
-        return path
+        return data if isinstance(data, dict) else {}
+
+    def _service(self) -> PortfolioService:
+        return PortfolioService(self.server.portfolio, self.server.provider)
 
     def do_GET(self) -> None:
-        parsed = urllib.parse.urlparse(self.path)
-        path = self._normalize_path(parsed.path)
+        path = urlsplit(self.path).path
 
-        try:
-            if path in {"/", "/index.html"}:
-                service = self._service()
-                self._send_html(_render_ui(service.get_summary()))
-            elif path in {"/api/portfolio", "/api/summary"}:
+        if path == "/":
+            self._send_html(_HTML)
+            return
+
+        if path == "/api/summary":
+            with self.server.lock:
                 service = self._service()
                 self._send_json(service.get_summary().to_dict())
-            elif path == "/api/assets":
+            return
+
+        if path == "/api/holdings":
+            with self.server.lock:
                 service = self._service()
                 self._send_json([holding.to_dict() for holding in service.get_holdings()])
-            elif path == "/api/prices":
-                service = self._service()
-                self._send_json(self._all_prices(service))
-            elif path == "/health":
-                self._send_json({"status": "ok"})
-            else:
-                self._send_json({"error": "not found"}, status=404)
-        except Exception as exc:
-            self._send_json({"error": str(exc)}, status=500)
+            return
+
+        if path == "/api/assets":
+            with self.server.lock:
+                self._send_json([asset.to_dict() for asset in self.server.portfolio.assets()])
+            return
+
+        if path == "/api/prices":
+            with self.server.lock:
+                provider = self.server.provider
+                self._send_json(
+                    {symbol: provider.get_price(symbol) for symbol in provider.symbols()}
+                )
+            return
+
+        self._send_json({"error": "not found"}, status=404)
 
     def do_POST(self) -> None:
-        parsed = urllib.parse.urlparse(self.path)
-        path = self._normalize_path(parsed.path)
-        body = self._read_json()
+        path = urlsplit(self.path).path
 
-        try:
-            service = self._service()
+        if path == "/api/assets":
+            payload = self._read_json()
+            symbol = payload.get("symbol")
 
-            if path in {"/api/assets", "/api/portfolio/assets"}:
-                if not isinstance(body, dict) or "symbol" not in body:
-                    raise ValueError("symbol is required")
+            if not symbol:
+                self._send_json({"error": "symbol is required"}, status=400)
+                return
 
-                symbol = body["symbol"]
+            quantity = payload.get("quantity", 0)
+            avg_price = payload.get("avg_price")
+            cost_basis = payload.get("cost_basis")
 
-                if body.get("remove"):
-                    ok = service.remove_asset(symbol, body.get("quantity"))
-                    if not ok:
-                        self._send_json({"error": "asset not found"}, status=404)
-                        return
-                elif (
-                    "set_quantity" in body
-                    or body.get("action") == "set"
-                    or ("quantity" in body and body.get("set"))
-                ):
-                    quantity = body.get("set_quantity", body.get("quantity", 0.0))
-                    ok = service.set_quantity(symbol, quantity)
-                    if not ok:
-                        self._send_json({"error": "asset not found"}, status=404)
-                        return
-                else:
-                    service.add_asset(
+            with self.server.lock:
+                service = self._service()
+
+                try:
+                    asset = service.add_asset(
                         symbol,
-                        body.get("quantity", 0.0),
-                        body.get("cost_basis", body.get("cost", 0.0)),
-                        body.get("avg_price", body.get("avg")),
+                        quantity=quantity,
+                        cost_basis=cost_basis,
+                        avg_price=avg_price,
                     )
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=400)
+                    return
 
-                if self._injected_service is None:
-                    _save_portfolio(self.portfolio_path, service.portfolio)
+                _save_portfolio(self.server.portfolio_path, self.server.portfolio)
+                summary = service.get_summary()
 
-                self._send_json(service.get_summary().to_dict(), status=201)
+            asset_payload = asset.to_dict() if asset is not None else None
+            self._send_json({"asset": asset_payload, "summary": summary.to_dict()})
+            return
 
-            elif path in {"/api/prices", "/api/portfolio/prices"}:
-                if not isinstance(body, dict) or "symbol" not in body or "price" not in body:
-                    raise ValueError("symbol and price are required")
+        if path == "/api/prices":
+            payload = self._read_json()
+            symbol = payload.get("symbol")
+            price = payload.get("price")
 
-                service.set_price(body["symbol"], body["price"])
+            if not symbol or price is None:
+                self._send_json({"error": "symbol and price are required"}, status=400)
+                return
 
-                if self._injected_service is None and self.prices_path:
-                    _save_price_provider(service.provider, self.prices_path)
+            with self.server.lock:
+                try:
+                    normalized_symbol = normalize_symbol(symbol)
+                    self.server.provider.set_price(normalized_symbol, price)
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, status=400)
+                    return
 
-                self._send_json(self._all_prices(service), status=201)
+                _save_price_provider(self.server.prices_path, self.server.provider)
 
+            self._send_json({"symbol": normalized_symbol, "price": float(price)})
+            return
+
+        self._send_json({"error": "not found"}, status=404)
+
+    def do_DELETE(self) -> None:
+        path = urlsplit(self.path).path
+
+        if path.startswith("/api/assets/"):
+            symbol = unquote(path[len("/api/assets/"):])
+
+            with self.server.lock:
+                try:
+                    normalized_symbol = normalize_symbol(symbol)
+                except ValueError:
+                    self._send_json({"error": "symbol is required"}, status=400)
+                    return
+
+                removed = self.server.portfolio.remove_asset(normalized_symbol)
+                _save_portfolio(self.server.portfolio_path, self.server.portfolio)
+
+                service = self._service()
+                summary = service.get_summary()
+
+            if not removed:
+                self._send_json(
+                    {"error": "asset not found", "summary": summary.to_dict()},
+                    status=404,
+                )
             else:
-                self._send_json({"error": "not found"}, status=404)
+                self._send_json({"removed": True, "summary": summary.to_dict()})
+            return
 
-        except ValueError as exc:
-            self._send_json({"error": str(exc)}, status=400)
-        except Exception as exc:
-            self._send_json({"error": str(exc)}, status=500)
-
-
-def _render_ui(summary: PortfolioSummary) -> str:
-    rows = []
-
-    for holding in summary.holdings:
-        rows.append(
-            "<tr>"
-            f"<td>{html.escape(holding.symbol)}</td>"
-            f"<td>{holding.quantity:.4f}</td>"
-            f"<td>{holding.price:.2f}</td>"
-            f"<td>{holding.value:.2f}</td>"
-            f"<td>{holding.cost_basis:.2f}</td>"
-            f"<td>{holding.profit_loss:.2f}</td>"
-            f"<td>{holding.profit_loss_pct:.2f}%</td>"
-            f"<td>{holding.allocation_pct:.2f}%</td>"
-            "</tr>"
-        )
-
-    return f"""<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>Crypto Portfolio</title>
-{_STYLE}
-</head>
-<body>
-<h1>Crypto Portfolio</h1>
-<h2>Portfolio</h2>
-<div id="assets">
-<table>
-<thead>
-<tr>
-<th>Symbol</th>
-<th>Quantity</th>
-<th>Price</th>
-<th>Value</th>
-<th>Cost</th>
-<th>PnL</th>
-<th>PnL%</th>
-<th>Alloc%</th>
-</tr>
-</thead>
-<tbody>
-{''.join(rows)}
-</tbody>
-</table>
-</div>
-<p>Total value: <span id="total-value">{summary.total_value:.2f}</span> {html.escape(summary.currency)}</p>
-<p>Total cost: {summary.total_cost:.2f} {html.escape(summary.currency)}</p>
-<p>Total PnL: {summary.total_profit_loss:.2f} ({summary.profit_loss_pct:.2f}%)</p>
-{_SCRIPT}
-</body>
-</html>
-"""
+        self._send_json({"error": "not found"}, status=404)
 
 
 def create_server(
-    host: str = "127.0.0.1",
-    port: int = 0,
-    portfolio_path: str = DEFAULT_PORTFOLIO_PATH,
-    prices_path: Optional[str] = None,
-    service: Optional[PortfolioService] = None,
-) -> ThreadingHTTPServer:
-    if isinstance(host, tuple):
-        host, port = host
-
-    host = str(host or "127.0.0.1")
-
-    try:
-        port = int(port)
-    except (TypeError, ValueError):
-        port = 0
-
-    if port < 0:
-        port = 0
-
-    if portfolio_path is None:
-        portfolio_path = DEFAULT_PORTFOLIO_PATH
-
-    handler = partial(
-        PortfolioRequestHandler,
-        portfolio_path=portfolio_path,
-        prices_path=prices_path,
-        service=service,
-    )
-
-    return ThreadingHTTPServer((host, port), handler)
-
-
-def run_server(
-    host: str = "127.0.0.1",
-    port: int = 8000,
-    portfolio_path: str = DEFAULT_PORTFOLIO_PATH,
-    prices_path: Optional[str] = None,
-    service: Optional[PortfolioService] = None,
-) -> None:
-    server = create_server(
-        host=host,
-        port=port,
-        portfolio_path=portfolio_path,
-        prices_path=prices_path,
-        service=service,
-    )
-
-    print(f"Serving on http://{host}:{server.server_address[1]}")
-
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        server.server_close()
+    host: str,
+    port: int,
+    portfolio_path: str | None,
+    prices_path: str | None,
+) -> _PortfolioHTTPServer:
+    return _PortfolioHTTPServer((host, port), _Handler, portfolio_path, prices_path)

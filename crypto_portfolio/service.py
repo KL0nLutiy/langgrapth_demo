@@ -1,8 +1,16 @@
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from collections.abc import Mapping
+from typing import Any, Dict, List, Optional
 
-from .models import Asset, AssetValue, Portfolio, PortfolioSummary, _validate_amount
+from .models import (
+    Asset,
+    AssetValue,
+    Portfolio,
+    PortfolioSummary,
+    _validate_amount,
+    normalize_symbol,
+)
 from .pricing import PriceProvider
 
 
@@ -11,12 +19,25 @@ class PortfolioService:
         self.portfolio = portfolio
         self.provider = provider
 
+    def _get_price(self, symbol: str) -> float:
+        if self.provider is None:
+            return 0.0
+
+        if isinstance(self.provider, Mapping):
+            return Portfolio._price_for(self.provider, symbol)
+
+        get_price = getattr(self.provider, "get_price", None)
+        if callable(get_price):
+            return float(get_price(symbol) or 0.0)
+
+        return 0.0
+
     def get_holding(self, symbol: str) -> Optional[AssetValue]:
         asset = self.portfolio.get_asset(symbol)
         if asset is None:
             return None
 
-        price = float(self.provider.get_price(asset.symbol) or 0.0)
+        price = self._get_price(asset.symbol)
         value = asset.quantity * price
         cost = asset.cost_basis
         profit_loss = value - cost
@@ -77,44 +98,62 @@ class PortfolioService:
         if symbols is None:
             symbols = self.portfolio.symbols()
 
-        return self.provider.get_prices(symbols)
+        if isinstance(self.provider, Mapping):
+            return {symbol: Portfolio._price_for(self.provider, symbol) for symbol in symbols}
+
+        get_prices = getattr(self.provider, "get_prices", None)
+        if callable(get_prices):
+            return get_prices(symbols)
+
+        return {symbol: self._get_price(symbol) for symbol in symbols}
 
     def get_price(self, symbol: str) -> float:
-        return self.provider.get_price(symbol)
+        return self._get_price(symbol)
 
     def add_asset(
         self,
         symbol: str,
-        quantity: float = 0.0,
-        cost_basis: float = 0.0,
-        avg_price: Optional[float] = None,
-    ) -> Asset:
+        quantity: Any = 0.0,
+        cost_basis: Optional[Any] = None,
+        avg_price: Optional[Any] = None,
+    ) -> Optional[Asset]:
+        normalized_symbol = normalize_symbol(symbol)
+        quantity = _validate_amount(quantity, "quantity")
+
         if avg_price is not None:
-            quantity = _validate_amount(quantity, "quantity")
             avg_price = _validate_amount(avg_price, "avg_price")
-            cost_basis = quantity * avg_price
-        else:
-            quantity = _validate_amount(quantity, "quantity")
+
+        if cost_basis is not None:
             cost_basis = _validate_amount(cost_basis, "cost_basis")
 
-        return self.portfolio.add_asset(symbol, quantity, cost_basis)
+        if quantity == 0:
+            return self.portfolio.get_asset(normalized_symbol)
 
-    def add_holding(self, symbol: str, quantity: float, avg_price: float) -> Asset:
-        return self.add_asset(symbol, quantity, avg_price=avg_price)
+        if avg_price is not None:
+            cost_basis = avg_price * quantity
 
-    def set_quantity(self, symbol: str, quantity: float) -> bool:
+        if cost_basis is None:
+            cost_basis = 0.0
+
+        cost_basis = _validate_amount(cost_basis, "cost_basis")
+
+        return self.portfolio.add_asset(
+            normalized_symbol,
+            quantity=quantity,
+            cost_basis=cost_basis,
+        )
+
+    def set_quantity(self, symbol: str, quantity: Any) -> Optional[Asset]:
         quantity = _validate_amount(quantity, "quantity")
         return self.portfolio.set_quantity(symbol, quantity)
 
-    def remove_asset(self, symbol: str, quantity: Optional[float] = None) -> bool:
-        if quantity is not None:
-            quantity = _validate_amount(quantity, "quantity")
-
+    def remove_asset(self, symbol: str, quantity: Optional[Any] = None) -> bool:
         return self.portfolio.remove_asset(symbol, quantity)
 
-    def remove_quantity(self, symbol: str, quantity: float) -> bool:
-        return self.remove_asset(symbol, quantity)
-
-    def set_price(self, symbol: str, price: float) -> None:
+    def set_price(self, symbol: str, price: Any) -> float:
         price = _validate_amount(price, "price")
         self.provider.set_price(symbol, price)
+        return price
+
+    def export(self) -> Dict[str, Any]:
+        return self.portfolio.to_dict()

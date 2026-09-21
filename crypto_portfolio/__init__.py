@@ -1,15 +1,10 @@
 from __future__ import annotations
 
-from .models import (
-    Asset,
-    AssetValue,
-    Portfolio,
-    PortfolioSummary,
-    _validate_amount,
-    normalize_symbol,
-)
+from .models import Asset, AssetValue, Portfolio, PortfolioSummary
 from .pricing import PriceProvider, SamplePriceProvider, StaticPriceProvider
 from .service import PortfolioService
+
+__version__ = "0.1.0"
 
 __all__ = [
     "Asset",
@@ -20,6 +15,5 @@ __all__ = [
     "PriceProvider",
     "SamplePriceProvider",
     "StaticPriceProvider",
-    "_validate_amount",
-    "normalize_symbol",
+    "__version__",
 ]
